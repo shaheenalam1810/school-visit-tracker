@@ -2,7 +2,8 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Send, MapPin, Users, GraduationCap } from "lucide-react";
+import { Send, Users, GraduationCap } from "lucide-react";
+import LocationCapture, { CapturedLocation } from "@/components/LocationCapture";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import TopBar from "@/components/TopBar";
 import Card from "@/components/Card";
@@ -27,8 +28,11 @@ const EMPTY_FORM = (executiveName: string): VisitPayload => ({
   designation: "",
   mobile: "",
   address: "",
-  google_map: "",
-  instruction: "",
+google_map: "",
+latitude: "",
+longitude: "",
+accuracy: "",
+instruction: "",
   students: "",
   teachers: "",
   current_software: "",
@@ -56,6 +60,17 @@ function NewVisitContent() {
 
   const [form, setForm] = useState<VisitPayload>(() => EMPTY_FORM(user?.name || ""));
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isLocationCaptured = Boolean(form.latitude && form.longitude);
+
+function handleLocationCapture(location: CapturedLocation) {
+  setForm((prev) => ({
+    ...prev,
+    latitude: location.latitude,
+    longitude: location.longitude,
+    accuracy: location.accuracy,
+    google_map: location.google_map,
+  }));
+}
 
   function update<K extends keyof VisitPayload>(key: K, value: VisitPayload[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -155,14 +170,19 @@ function NewVisitContent() {
               placeholder="Full address of the school"
               rows={2}
             />
-            <Input
-              label="Google Location Link"
-              icon={<MapPin className="h-4 w-4" />}
-              type="url"
-              value={form.google_map}
-              onChange={(e) => update("google_map", e.target.value)}
-              placeholder="https://maps.google.com/..."
-            />
+            <LocationCapture
+  value={
+    isLocationCaptured
+      ? {
+          latitude: form.latitude,
+          longitude: form.longitude,
+          accuracy: form.accuracy,
+          google_map: form.google_map,
+        }
+      : null
+  }
+  onCapture={handleLocationCapture}
+/>
             <Textarea
               label="Address Instruction"
               value={form.instruction}
@@ -235,10 +255,19 @@ function NewVisitContent() {
           </div>
         </Card>
 
-        <Button type="submit" isLoading={isSubmitting} className="mt-1">
-          <Send className="h-5 w-5" />
-          {isSubmitting ? "Submitting..." : "Submit Visit"}
-        </Button>
+        <Button
+  type="submit"
+  isLoading={isSubmitting}
+  disabled={!isLocationCaptured}
+  className="mt-1"
+>
+  <Send className="h-5 w-5" />
+  {isSubmitting
+    ? "Submitting..."
+    : isLocationCaptured
+    ? "Submit Visit"
+    : "Capture Location to Submit"}
+</Button>
       </form>
     </div>
   );

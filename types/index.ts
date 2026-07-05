@@ -8,8 +8,11 @@ export interface VisitPayload {
   designation: string;
   mobile: string;
   address: string;
-  google_map: string;
-  instruction: string;
+google_map: string;
+latitude: string;
+longitude: string;
+accuracy: string;
+instruction: string;
   students: string;
   teachers: string;
   current_software: string;
