@@ -207,6 +207,21 @@ export default function VisitDetailsModal({ visit, onClose, onUpdated, onDeleted
               </span>
             )}
 
+            {canManage && (
+              <div className="mb-5 flex gap-3">
+                <Button variant="ghost" onClick={startEdit}>
+                  <Pencil className="h-4 w-4" /> Edit
+                </Button>
+                <Button
+                  variant="secondary"
+                  className="!bg-red-600 !text-white hover:!bg-red-700"
+                  onClick={() => setShowDeleteConfirm(true)}
+                >
+                  <Trash2 className="h-4 w-4" /> Delete
+                </Button>
+              </div>
+            )}
+
             <Section title="School Information">
               <Field label="School Name" value={visit.school_name} full />
               <Field label="Address" value={visit.address} full />
@@ -245,6 +260,10 @@ export default function VisitDetailsModal({ visit, onClose, onUpdated, onDeleted
               <Field label="Notes" value={visit.notes} full />
             </Section>
 
+            <div className="mb-5 border-t border-ink-50 pt-4">
+              <FollowUpTimeline visit={visit} />
+            </div>
+
             <Section title="Visit Information">
               <Field label="Executive" value={visit.executive} />
               <Field label="Username" value={visit.username} />
@@ -252,7 +271,7 @@ export default function VisitDetailsModal({ visit, onClose, onUpdated, onDeleted
               <Field label="Timestamp" value={formatDateTime(visit.timestamp)} />
             </Section>
 
-            <div className="mb-5">
+            <div className="mb-1">
               <div className="mb-2 flex items-center gap-2">
                 <Clock className="h-3.5 w-3.5 text-ink-400" />
                 <h4 className="font-display text-xs font-bold uppercase tracking-wide text-ink-500">
@@ -268,25 +287,6 @@ export default function VisitDetailsModal({ visit, onClose, onUpdated, onDeleted
                 <Field label="Deleted Time" value={formatDateTime(visit.deleted_at)} />
               </div>
             </div>
-
-            <div className="mb-1 border-t border-ink-50 pt-4">
-              <FollowUpTimeline visit={visit} />
-            </div>
-
-            {canManage && (
-              <div className="mt-5 flex gap-3 border-t border-ink-50 pt-4">
-                <Button variant="ghost" onClick={startEdit}>
-                  <Pencil className="h-4 w-4" /> Edit
-                </Button>
-                <Button
-                  variant="secondary"
-                  className="!bg-red-600 !text-white hover:!bg-red-700"
-                  onClick={() => setShowDeleteConfirm(true)}
-                >
-                  <Trash2 className="h-4 w-4" /> Delete
-                </Button>
-              </div>
-            )}
           </div>
         ) : (
           <div className="flex flex-col gap-4">

@@ -223,20 +223,16 @@ export default function FollowUpTimeline({ visit }: FollowUpTimelineProps) {
 
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Flag className="h-3.5 w-3.5 text-ink-400" />
-          <h4 className="font-display text-xs font-bold uppercase tracking-wide text-ink-500">Follow-up Timeline</h4>
-        </div>
-        {canAdd && formTarget === null && (
-          <button
-            onClick={openAdd}
-            className="flex items-center gap-1 rounded-full bg-ink-50 px-2.5 py-1 text-xs font-semibold text-ink-700 active:scale-95"
-          >
-            <Plus className="h-3.5 w-3.5" /> Add
-          </button>
-        )}
+      <div className="mb-3 flex items-center gap-2">
+        <Flag className="h-3.5 w-3.5 text-ink-400" />
+        <h4 className="font-display text-xs font-bold uppercase tracking-wide text-ink-500">Follow-up Timeline</h4>
       </div>
+
+      {canAdd && formTarget === null && (
+        <Button variant="secondary" className="mb-4" onClick={openAdd}>
+          <Plus className="h-4 w-4" /> Add Follow-up
+        </Button>
+      )}
 
       {formTarget !== null && (
         <form onSubmit={handleSubmit} className="mb-4 flex flex-col gap-3 rounded-xl2 border border-ink-100 bg-ink-50/40 p-3">
