@@ -14,6 +14,7 @@ import {
   Trophy,
   Settings,
   ListChecks,
+  History,
 } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import TopBar from "@/components/TopBar";
@@ -22,6 +23,7 @@ import Input from "@/components/Input";
 import Button from "@/components/Button";
 import StatCard from "@/components/StatCard";
 import Loader from "@/components/Loader";
+import VisitDetailsModal from "@/components/VisitDetailsModal";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { getUsers, getVisits } from "@/lib/api";
@@ -38,6 +40,7 @@ function AdminDashboardContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState("");
+  const [selectedVisit, setSelectedVisit] = useState<VisitRecord | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -115,12 +118,17 @@ function AdminDashboardContent() {
 
       <div className="mx-auto max-w-lg px-4 pt-5">
         {/* Quick nav */}
-        <div className="mb-5 grid grid-cols-2 gap-3">
+        <div className="mb-3 grid grid-cols-2 gap-3">
           <Button variant="secondary" onClick={() => router.push("/admin/users")}>
             <Settings className="h-4 w-4" /> Manage Users
           </Button>
           <Button variant="ghost" onClick={() => router.push("/admin/visits")}>
             <ListChecks className="h-4 w-4" /> Manage Visits
+          </Button>
+        </div>
+        <div className="mb-5">
+          <Button variant="ghost" onClick={() => router.push("/admin/activity")}>
+            <History className="h-4 w-4" /> Activity Log
           </Button>
         </div>
 
@@ -217,7 +225,11 @@ function AdminDashboardContent() {
         ) : (
           <div className="flex flex-col gap-3">
             {filteredVisits.slice(0, 25).map((v, idx) => (
-              <Card key={`${v.timestamp || idx}-${v.school_name}`} className="flex flex-col gap-1.5">
+              <Card
+                key={`${v.timestamp || idx}-${v.school_name}`}
+                className="flex cursor-pointer flex-col gap-1.5 transition active:scale-[0.99]"
+                onClick={() => setSelectedVisit(v)}
+              >
                 <div className="flex items-center justify-between gap-2">
                   <p className="truncate font-display text-sm font-bold text-ink-900">{v.school_name}</p>
                   <span className="flex-shrink-0 text-xs font-body text-ink-400">{v.date}</span>
@@ -235,6 +247,23 @@ function AdminDashboardContent() {
           </div>
         )}
       </div>
+
+      {selectedVisit && (
+        <VisitDetailsModal
+          visit={selectedVisit}
+          onClose={() => setSelectedVisit(null)}
+          onUpdated={(updated) => {
+            setVisits((prev) =>
+              prev.map((v) => (v.visit_id === updated.visit_id ? updated : v))
+            );
+            setSelectedVisit(updated);
+          }}
+          onDeleted={(visitId) => {
+            setVisits((prev) => prev.filter((v) => v.visit_id !== visitId));
+            setSelectedVisit(null);
+          }}
+        />
+      )}
     </div>
   );
 }

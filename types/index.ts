@@ -27,7 +27,36 @@ export interface VisitPayload {
 
 export interface VisitRecord extends VisitPayload {
   timestamp?: string;
+  visit_id?: string;
+  created_by?: string;
+  updated_by?: string;
+  updated_at?: string;
+  deleted?: string;
+  deleted_by?: string;
+  deleted_at?: string;
 }
+
+/** Fields a visit edit is allowed to change. Kept in sync with the
+ * Apps Script VISIT_EDITABLE_FIELDS list. */
+export type VisitEditableFields = Pick<
+  VisitPayload,
+  | "school_name"
+  | "visitor"
+  | "designation"
+  | "mobile"
+  | "address"
+  | "students"
+  | "teachers"
+  | "current_software"
+  | "interest"
+  | "report"
+  | "followup"
+  | "notes"
+  | "google_map"
+  | "latitude"
+  | "longitude"
+  | "accuracy"
+>;
 
 export interface AuthUser {
   username: string;
@@ -55,4 +84,14 @@ export interface ApiResponse<T = unknown> {
   success: boolean;
   message?: string;
   data?: T;
+}
+
+export interface ActivityLogRecord {
+  timestamp?: string;
+  username: string;
+  action: string;
+  details?: string;
+  date: string;
+  time: string;
+  ip: string;
 }

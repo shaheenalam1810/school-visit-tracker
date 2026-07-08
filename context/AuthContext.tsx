@@ -9,7 +9,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { AuthUser, UserRole, UserStatus } from "@/types";
-import { loginRequest } from "@/lib/api";
+import { loginRequest, logoutRequest } from "@/lib/api";
 import { persistUser, readPersistedUser, clearPersistedUser } from "@/lib/auth";
 
 interface AuthContextValue {
@@ -60,6 +60,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
+    if (user) {
+      // Fire-and-forget — don't block navigation on the logging call.
+      logoutRequest(user.username);
+    }
     clearPersistedUser();
     setUser(null);
     router.replace("/login");

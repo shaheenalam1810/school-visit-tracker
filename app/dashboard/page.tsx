@@ -21,6 +21,7 @@ import Card from "@/components/Card";
 import Input from "@/components/Input";
 import StatCard from "@/components/StatCard";
 import Loader from "@/components/Loader";
+import VisitDetailsModal from "@/components/VisitDetailsModal";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { getVisits } from "@/lib/api";
@@ -39,6 +40,7 @@ function DashboardContent() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState("");
+  const [selectedVisit, setSelectedVisit] = useState<VisitRecord | null>(null);
   const { user } = useAuth();
   const { showError } = useToast();
   const router = useRouter();
@@ -172,7 +174,11 @@ function DashboardContent() {
               const badge = interestBadge[v.interest as string] || null;
               const Icon = badge?.icon;
               return (
-                <Card key={`${v.timestamp || idx}-${v.school_name}`} className="flex flex-col gap-2">
+                <Card
+                  key={`${v.timestamp || idx}-${v.school_name}`}
+                  className="flex cursor-pointer flex-col gap-2 transition active:scale-[0.99]"
+                  onClick={() => setSelectedVisit(v)}
+                >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-ink-50 text-ink-700">
@@ -203,6 +209,7 @@ function DashboardContent() {
                       href={v.google_map}
                       target="_blank"
                       rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
                       className="w-fit text-xs font-body text-blue-600 underline"
                     >
                       View on Google Maps
@@ -217,6 +224,23 @@ function DashboardContent() {
           </div>
         )}
       </div>
+
+      {selectedVisit && (
+        <VisitDetailsModal
+          visit={selectedVisit}
+          onClose={() => setSelectedVisit(null)}
+          onUpdated={(updated) => {
+            setVisits((prev) =>
+              prev.map((v) => (v.visit_id === updated.visit_id ? updated : v))
+            );
+            setSelectedVisit(updated);
+          }}
+          onDeleted={(visitId) => {
+            setVisits((prev) => prev.filter((v) => v.visit_id !== visitId));
+            setSelectedVisit(null);
+          }}
+        />
+      )}
     </div>
   );
 }

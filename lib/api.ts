@@ -1,9 +1,11 @@
 import axios from "axios";
 import {
+  ActivityLogRecord,
   ApiResponse,
   LoginResponse,
   UserRecord,
   UserRole,
+  VisitEditableFields,
   VisitPayload,
   VisitRecord,
 } from "@/types";
@@ -67,7 +69,8 @@ export async function submitVisit(
 /**
  * Fetches visit rows from the "Visits" sheet. Admins get every row;
  * everyone else only gets rows tagged with their own username — the
- * scoping happens server-side in Code.gs.
+ * scoping happens server-side in Code.gs (the `role` param is not
+ * trusted by the backend, only sent for parity with the request shape).
  */
 export async function getVisits(
   username: string,
@@ -78,6 +81,31 @@ export async function getVisits(
   });
   const data = res.data as ApiResponse<VisitRecord[]>;
   return data.data || [];
+}
+
+/**
+ * Updates an existing visit row in place (never appends a new row).
+ * The backend re-verifies the requester is an admin or the visit's
+ * owner before applying any change.
+ */
+export async function updateVisit(payload: {
+  requestedBy: string;
+  visit_id: string;
+} & Partial<VisitEditableFields>): Promise<ApiResponse> {
+  const res = await apiClient.post("", { action: "updateVisit", ...payload });
+  return res.data as ApiResponse;
+}
+
+/**
+ * Soft-deletes a visit (kept in the sheet with deleted/deleted_by/
+ * deleted_at stamped, excluded from all normal queries).
+ */
+export async function deleteVisit(payload: {
+  requestedBy: string;
+  visit_id: string;
+}): Promise<ApiResponse> {
+  const res = await apiClient.post("", { action: "deleteVisit", ...payload });
+  return res.data as ApiResponse;
 }
 
 /** Lists all users. Admin only (enforced server-side). */
@@ -134,6 +162,27 @@ export async function resetPassword(payload: {
 }): Promise<ApiResponse> {
   const res = await apiClient.post("", { action: "resetPassword", ...payload });
   return res.data as ApiResponse;
+}
+
+/** Fetches the Activity Log. Admin only (enforced server-side). */
+export async function getActivityLog(requestedBy: string): Promise<ActivityLogRecord[]> {
+  const res = await apiClient.get("", {
+    params: { action: "activityLog", requestedBy },
+  });
+  const data = res.data as ApiResponse<ActivityLogRecord[]>;
+  return data.data || [];
+}
+
+/**
+ * Best-effort log of a logout event. Fire-and-forget: failures are
+ * swallowed since the user is leaving anyway.
+ */
+export async function logoutRequest(username: string): Promise<void> {
+  try {
+    await apiClient.post("", { action: "logout", username });
+  } catch {
+    // Logging a logout must never block the user from actually logging out.
+  }
 }
 
 export default apiClient;
