@@ -2,6 +2,8 @@ import axios from "axios";
 import {
   ActivityLogRecord,
   ApiResponse,
+  FollowUpPayload,
+  FollowUpRecord,
   LoginResponse,
   UserRecord,
   UserRole,
@@ -105,6 +107,48 @@ export async function deleteVisit(payload: {
   visit_id: string;
 }): Promise<ApiResponse> {
   const res = await apiClient.post("", { action: "deleteVisit", ...payload });
+  return res.data as ApiResponse;
+}
+
+/**
+ * Fetches the follow-up history for one visit. The backend verifies
+ * the requester is an admin or the visit's owner before returning
+ * anything (soft-deleted entries are excluded).
+ */
+export async function getFollowUps(visitId: string, requestedBy: string): Promise<FollowUpRecord[]> {
+  const res = await apiClient.get("", {
+    params: { action: "followups", visit_id: visitId, requestedBy },
+  });
+  const data = res.data as ApiResponse<FollowUpRecord[]>;
+  return data.data || [];
+}
+
+/** Adds a follow-up entry to a visit. Admin or the visit's owner only. */
+export async function addFollowUp(
+  payload: { requestedBy: string } & FollowUpPayload
+): Promise<ApiResponse<FollowUpRecord>> {
+  const res = await apiClient.post("", { action: "addFollowUp", ...payload });
+  return res.data as ApiResponse<FollowUpRecord>;
+}
+
+/**
+ * Updates a follow-up entry in place. Admin or whoever created that
+ * specific entry only — not merely the visit's owner, so one rep
+ * can't alter a note an admin (or, in principle, someone else) added.
+ */
+export async function updateFollowUp(
+  payload: { requestedBy: string; followup_id: string } & Partial<FollowUpPayload>
+): Promise<ApiResponse> {
+  const res = await apiClient.post("", { action: "updateFollowUp", ...payload });
+  return res.data as ApiResponse;
+}
+
+/** Soft-deletes a follow-up entry. Admin or its creator only. */
+export async function deleteFollowUp(payload: {
+  requestedBy: string;
+  followup_id: string;
+}): Promise<ApiResponse> {
+  const res = await apiClient.post("", { action: "deleteFollowUp", ...payload });
   return res.data as ApiResponse;
 }
 

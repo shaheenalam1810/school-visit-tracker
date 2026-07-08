@@ -10,12 +10,16 @@
  *   5. Duplicate-visit prevention (same school_name + latitude + longitude)
  *   6. Editing/soft-deleting visits, with a full timeline (created/updated/deleted)
  *   7. An admin-only Activity Log of every important action
+ *   8. A Follow-up Timeline: each visit can have unlimited follow-up
+ *      entries (date, next date, type, status, notes), independent of
+ *      the single legacy "followup" field captured at visit creation
  *
- * Three sheets are used: "Visits", "Users", "ActivityLog". "ActivityLog"
- * is created automatically the first time anything is logged — you do
- * not need to create it by hand. Existing spreadsheets set up before
- * any of this existed are migrated automatically (missing columns are
- * added in place, existing rows/data are preserved).
+ * Four sheets are used: "Visits", "Users", "ActivityLog", "FollowUps".
+ * "ActivityLog" and "FollowUps" are created automatically the first
+ * time they're needed — you do not need to create them by hand.
+ * Existing spreadsheets set up before any of this existed are migrated
+ * automatically (missing columns are added in place, existing rows/
+ * data are preserved).
  *
  * SECURITY NOTE: every request re-derives the caller's role/status by
  * looking them up in the Users sheet by username. A `role` sent by the
@@ -45,6 +49,7 @@
 const VISITS_SHEET_NAME = "Visits";
 const USERS_SHEET_NAME = "Users";
 const ACTIVITY_LOG_SHEET_NAME = "ActivityLog";
+const FOLLOWUPS_SHEET_NAME = "FollowUps";
 
 // Canonical Visits schema for fields submitted from the New Visit form.
 const VISIT_FIELDS = [
@@ -84,6 +89,9 @@ const VISIT_SYSTEM_FIELDS = [
 
 // Fields an edit is allowed to change. Username, executive, and every
 // timeline/system field are read-only from the client's perspective.
+// "followup" is intentionally excluded: scheduling is now done through
+// FOLLOWUP_FIELDS entries (the Follow-up Timeline) instead of editing
+// this single legacy field in place.
 const VISIT_EDITABLE_FIELDS = [
   "school_name",
   "visitor",
@@ -95,7 +103,6 @@ const VISIT_EDITABLE_FIELDS = [
   "current_software",
   "interest",
   "report",
-  "followup",
   "notes",
   "google_map",
   "latitude",
@@ -107,6 +114,26 @@ const VISIT_EDITABLE_FIELDS = [
 const USER_FIELDS = ["username", "password", "name", "role", "status"];
 
 const ACTIVITY_LOG_FIELDS = ["timestamp", "username", "action", "details", "date", "time", "ip"];
+
+// Canonical FollowUps schema. Each row is one follow-up entry attached
+// to a visit via visit_id — a visit can have unlimited entries. Soft
+// deleted (never removed) so history is never lost.
+const FOLLOWUP_FIELDS = [
+  "followup_id",
+  "visit_id",
+  "followup_date",
+  "next_followup_date",
+  "type",
+  "status",
+  "notes",
+  "created_by",
+  "created_at",
+  "updated_by",
+  "updated_at",
+  "deleted",
+  "deleted_by",
+  "deleted_at",
+];
 
 /**
  * One-time setup: creates the sheets and headers if they don't exist.
@@ -142,13 +169,23 @@ function setup() {
     activityLog.appendRow(ACTIVITY_LOG_FIELDS);
     activityLog.setFrozenRows(1);
   }
+
+  let followUps = ss.getSheetByName(FOLLOWUPS_SHEET_NAME);
+  if (!followUps) {
+    followUps = ss.insertSheet(FOLLOWUPS_SHEET_NAME);
+  }
+  if (followUps.getLastRow() === 0) {
+    followUps.appendRow(FOLLOWUP_FIELDS);
+    followUps.setFrozenRows(1);
+  }
 }
 
 /**
  * Handles GET requests.
- *   ?action=visits&username=...          -> visits (all for admin, own for user)
- *   ?action=listUsers&requestedBy=...    -> all users (admin only)
- *   ?action=activityLog&requestedBy=...  -> activity log rows (admin only)
+ *   ?action=visits&username=...            -> visits (all for admin, own for user)
+ *   ?action=listUsers&requestedBy=...      -> all users (admin only)
+ *   ?action=activityLog&requestedBy=...    -> activity log rows (admin only)
+ *   ?action=followups&visit_id=...&requestedBy=...  -> follow-up history for one visit
  */
 function doGet(e) {
   const action = (e.parameter.action || "").toLowerCase();
@@ -163,6 +200,10 @@ function doGet(e) {
 
   if (action === "activitylog") {
     return jsonResponse(handleGetActivityLog(e));
+  }
+
+  if (action === "followups") {
+    return jsonResponse(handleGetFollowUps(e));
   }
 
   return jsonResponse({ success: true, message: "School Visit Tracker API is running." });
@@ -194,6 +235,12 @@ function doPost(e) {
       return jsonResponse(handleUpdateVisit(body));
     case "deletevisit":
       return jsonResponse(handleDeleteVisit(body));
+    case "addfollowup":
+      return jsonResponse(handleAddFollowUp(body));
+    case "updatefollowup":
+      return jsonResponse(handleUpdateFollowUp(body));
+    case "deletefollowup":
+      return jsonResponse(handleDeleteFollowUp(body));
     case "adduser":
       return jsonResponse(handleAddUser(body));
     case "updateuser":
@@ -235,6 +282,21 @@ function getActivityLogSheet() {
   if (!sheet) {
     sheet = ss.insertSheet(ACTIVITY_LOG_SHEET_NAME);
     sheet.appendRow(ACTIVITY_LOG_FIELDS);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+/**
+ * Returns the FollowUps sheet, creating it on first use so existing
+ * deployments don't need to re-run setup() to get follow-up support.
+ */
+function getFollowUpsSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(FOLLOWUPS_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(FOLLOWUPS_SHEET_NAME);
+    sheet.appendRow(FOLLOWUP_FIELDS);
     sheet.setFrozenRows(1);
   }
   return sheet;
@@ -348,6 +410,23 @@ function findVisitRow(sheet, visitId) {
   if (idCol === -1) return null;
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][idCol]) === String(visitId)) {
+      return { rowIndex: i + 1, headers: headers, values: values[i] };
+    }
+  }
+  return null;
+}
+
+/**
+ * Finds a FollowUps row by its system-generated followup_id.
+ */
+function findFollowUpRow(sheet, followupId) {
+  if (!sheet || !followupId) return null;
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const idCol = headers.indexOf("followup_id");
+  if (idCol === -1) return null;
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][idCol]) === String(followupId)) {
       return { rowIndex: i + 1, headers: headers, values: values[i] };
     }
   }
@@ -591,6 +670,187 @@ function handleDeleteVisit(body) {
   return { success: true, message: "Visit deleted." };
 }
 
+// ---------------------------------------------------------------------
+// Follow-ups
+// ---------------------------------------------------------------------
+
+/**
+ * Returns the (non-deleted) follow-up history for one visit, sorted
+ * oldest-first. Only the visit's owner or an admin may read it.
+ */
+function handleGetFollowUps(e) {
+  const visitId = e.parameter.visit_id || "";
+  const requestedBy = e.parameter.requestedBy || "";
+
+  const visitsSheet = getVisitsSheet();
+  const visit = findVisitRow(visitsSheet, visitId);
+  if (!visit) return { success: false, message: "Visit not found." };
+
+  const requester = resolveRequester(requestedBy);
+  if (requester.status !== "active") return { success: false, message: "Your account is disabled." };
+
+  const ownerUsername = String(visit.values[visit.headers.indexOf("username")] || "").trim().toLowerCase();
+  const isOwner = ownerUsername === String(requestedBy).trim().toLowerCase();
+  if (requester.role !== "admin" && !isOwner) {
+    return { success: false, message: "You can only view follow-ups for your own visits." };
+  }
+
+  const sheet = getFollowUpsSheet();
+  if (sheet.getLastRow() < 2) return { success: true, data: [] };
+
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const data = values
+    .slice(1)
+    .map(function (row) {
+      const record = {};
+      headers.forEach(function (h, i) {
+        let v = row[i];
+        if (v instanceof Date) v = v.toISOString();
+        record[h] = v;
+      });
+      return record;
+    })
+    .filter(function (r) {
+      return String(r.visit_id) === String(visitId) && r.deleted !== "true";
+    })
+    .sort(function (a, b) {
+      return String(a.followup_date || "").localeCompare(String(b.followup_date || ""));
+    });
+
+  return { success: true, data: data };
+}
+
+/**
+ * Adds a follow-up entry to a visit. The requester must be an admin
+ * or the visit's owner (adding is tied to visit ownership, unlike
+ * edit/delete below which are tied to who created the entry itself).
+ */
+function handleAddFollowUp(body) {
+  const visitsSheet = getVisitsSheet();
+  const visit = findVisitRow(visitsSheet, body.visit_id);
+  if (!visit) return { success: false, message: "Visit not found." };
+
+  const requester = resolveRequester(body.requestedBy);
+  if (requester.status !== "active") return { success: false, message: "Your account is disabled." };
+
+  const ownerUsername = String(visit.values[visit.headers.indexOf("username")] || "").trim().toLowerCase();
+  const isOwner = ownerUsername === String(body.requestedBy || "").trim().toLowerCase();
+  if (requester.role !== "admin" && !isOwner) {
+    return { success: false, message: "You can only add follow-ups to your own visits." };
+  }
+
+  if (!body.followup_date || !body.type || !body.status) {
+    return { success: false, message: "Follow-up date, type, and status are required." };
+  }
+
+  const sheet = getFollowUpsSheet();
+  const headers = getHeaders(sheet);
+  const now = new Date();
+  const followupId = Utilities.getUuid();
+
+  appendRowByHeaders(sheet, headers, {
+    followup_id: followupId,
+    visit_id: body.visit_id,
+    followup_date: body.followup_date,
+    next_followup_date: body.next_followup_date || "",
+    type: body.type,
+    status: body.status,
+    notes: body.notes || "",
+    created_by: body.requestedBy,
+    created_at: now,
+  });
+
+  const schoolName = visit.values[visit.headers.indexOf("school_name")] || "";
+  logActivity(body.requestedBy, "added a follow-up", String(schoolName) + " — " + body.type + " / " + body.status);
+
+  return {
+    success: true,
+    message: "Follow-up added.",
+    data: {
+      followup_id: followupId,
+      visit_id: body.visit_id,
+      followup_date: body.followup_date,
+      next_followup_date: body.next_followup_date || "",
+      type: body.type,
+      status: body.status,
+      notes: body.notes || "",
+      created_by: body.requestedBy,
+      created_at: now.toISOString(),
+    },
+  };
+}
+
+/**
+ * Updates a follow-up entry in place. The requester must be an admin
+ * or whoever created that specific entry — not merely the parent
+ * visit's owner, so a rep can't alter a note an admin added.
+ */
+function handleUpdateFollowUp(body) {
+  const sheet = getFollowUpsSheet();
+  const found = findFollowUpRow(sheet, body.followup_id);
+  if (!found) return { success: false, message: "Follow-up not found." };
+
+  const requester = resolveRequester(body.requestedBy);
+  if (requester.status !== "active") return { success: false, message: "Your account is disabled." };
+
+  const headers = found.headers;
+  const createdBy = String(found.values[headers.indexOf("created_by")] || "").trim().toLowerCase();
+  const isCreator = createdBy === String(body.requestedBy || "").trim().toLowerCase();
+  if (requester.role !== "admin" && !isCreator) {
+    return { success: false, message: "You can only edit your own follow-ups." };
+  }
+  if (found.values[headers.indexOf("deleted")] === "true") {
+    return { success: false, message: "This follow-up has been deleted." };
+  }
+
+  const editableFields = ["followup_date", "next_followup_date", "type", "status", "notes"];
+  editableFields.forEach(function (field) {
+    if (body[field] === undefined) return;
+    const colIdx = headers.indexOf(field);
+    if (colIdx === -1) return;
+    sheet.getRange(found.rowIndex, colIdx + 1).setValue(body[field]);
+  });
+
+  const updatedByIdx = headers.indexOf("updated_by");
+  const updatedAtIdx = headers.indexOf("updated_at");
+  if (updatedByIdx !== -1) sheet.getRange(found.rowIndex, updatedByIdx + 1).setValue(body.requestedBy || "");
+  if (updatedAtIdx !== -1) sheet.getRange(found.rowIndex, updatedAtIdx + 1).setValue(new Date());
+
+  logActivity(body.requestedBy, "edited a follow-up", String(body.followup_id || ""));
+  return { success: true, message: "Follow-up updated." };
+}
+
+/**
+ * Soft-deletes a follow-up entry (kept for history, excluded from
+ * getFollowUps/getLatestFollowUpMap). Admin or its creator only.
+ */
+function handleDeleteFollowUp(body) {
+  const sheet = getFollowUpsSheet();
+  const found = findFollowUpRow(sheet, body.followup_id);
+  if (!found) return { success: false, message: "Follow-up not found." };
+
+  const requester = resolveRequester(body.requestedBy);
+  if (requester.status !== "active") return { success: false, message: "Your account is disabled." };
+
+  const headers = found.headers;
+  const createdBy = String(found.values[headers.indexOf("created_by")] || "").trim().toLowerCase();
+  const isCreator = createdBy === String(body.requestedBy || "").trim().toLowerCase();
+  if (requester.role !== "admin" && !isCreator) {
+    return { success: false, message: "You can only delete your own follow-ups." };
+  }
+
+  const deletedIdx = headers.indexOf("deleted");
+  const deletedByIdx = headers.indexOf("deleted_by");
+  const deletedAtIdx = headers.indexOf("deleted_at");
+  if (deletedIdx !== -1) sheet.getRange(found.rowIndex, deletedIdx + 1).setValue("true");
+  if (deletedByIdx !== -1) sheet.getRange(found.rowIndex, deletedByIdx + 1).setValue(body.requestedBy || "");
+  if (deletedAtIdx !== -1) sheet.getRange(found.rowIndex, deletedAtIdx + 1).setValue(new Date());
+
+  logActivity(body.requestedBy, "deleted a follow-up", String(body.followup_id || ""));
+  return { success: true, message: "Follow-up deleted." };
+}
+
 /**
  * True if a visit with the same school_name (case-insensitive) and
  * the same latitude/longitude already exists in the sheet.
@@ -625,7 +885,13 @@ function isDuplicateVisit(sheet, headers, schoolName, lat, lng) {
 
 /**
  * Reads every visit row and returns it as an array of objects keyed
- * by the sheet's actual header row (plus a timestamp).
+ * by the sheet's actual header row (plus a timestamp). Each visit's
+ * "followup" field is transparently kept in sync with its Follow-up
+ * Timeline: if the visit has follow-up entries, "followup" reflects
+ * the most recent entry's next_followup_date instead of the static
+ * value captured at visit creation — so every existing consumer of
+ * v.followup (dashboards, follow-up buckets) keeps working unchanged
+ * while automatically reflecting the richer follow-up system.
  */
 function getAllVisits() {
   const sheet = getVisitsSheet();
@@ -634,6 +900,7 @@ function getAllVisits() {
   const values = sheet.getDataRange().getValues();
   const headers = values[0];
   const rows = values.slice(1);
+  const latestFollowUpByVisit = getLatestFollowUpMap();
 
   return rows.map((row) => {
     const record = {};
@@ -646,8 +913,49 @@ function getAllVisits() {
       }
       record[header] = value;
     });
+
+    const latest = latestFollowUpByVisit[record.visit_id];
+    if (latest) {
+      record.followup = latest.next_followup_date || record.followup || "";
+      record.latest_followup_status = latest.status || "";
+    }
     return record;
   });
+}
+
+/**
+ * Builds a map of visit_id -> most recent (by followup_date) non-
+ * deleted follow-up entry, read from the FollowUps sheet in one pass.
+ */
+function getLatestFollowUpMap() {
+  const sheet = getFollowUpsSheet();
+  if (!sheet || sheet.getLastRow() < 2) return {};
+
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  const visitIdIdx = headers.indexOf("visit_id");
+  const dateIdx = headers.indexOf("followup_date");
+  const nextIdx = headers.indexOf("next_followup_date");
+  const statusIdx = headers.indexOf("status");
+  const deletedIdx = headers.indexOf("deleted");
+
+  const map = {};
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    if (deletedIdx !== -1 && row[deletedIdx] === "true") continue;
+
+    const visitId = row[visitIdIdx];
+    const dateVal = String(row[dateIdx] || "");
+    const existing = map[visitId];
+    if (!existing || dateVal > existing.followup_date) {
+      map[visitId] = {
+        followup_date: dateVal,
+        next_followup_date: row[nextIdx],
+        status: row[statusIdx],
+      };
+    }
+  }
+  return map;
 }
 
 // ---------------------------------------------------------------------

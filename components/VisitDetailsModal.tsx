@@ -17,6 +17,7 @@ import Textarea from "./Textarea";
 import InterestPicker from "./InterestPicker";
 import LocationCapture, { CapturedLocation } from "./LocationCapture";
 import ConfirmDialog from "./ConfirmDialog";
+import FollowUpTimeline from "./FollowUpTimeline";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { deleteVisit, updateVisit } from "@/lib/api";
@@ -72,7 +73,6 @@ type EditForm = {
   current_software: string;
   interest: InterestLevel | "";
   report: string;
-  followup: string;
   notes: string;
   google_map: string;
   latitude: string;
@@ -92,7 +92,6 @@ function toEditForm(v: VisitRecord): EditForm {
     current_software: v.current_software || "",
     interest: v.interest || "",
     report: v.report || "",
-    followup: v.followup || "",
     notes: v.notes || "",
     google_map: v.google_map || "",
     latitude: v.latitude || "",
@@ -253,7 +252,7 @@ export default function VisitDetailsModal({ visit, onClose, onUpdated, onDeleted
               <Field label="Timestamp" value={formatDateTime(visit.timestamp)} />
             </Section>
 
-            <div className="mb-1">
+            <div className="mb-5">
               <div className="mb-2 flex items-center gap-2">
                 <Clock className="h-3.5 w-3.5 text-ink-400" />
                 <h4 className="font-display text-xs font-bold uppercase tracking-wide text-ink-500">
@@ -268,6 +267,10 @@ export default function VisitDetailsModal({ visit, onClose, onUpdated, onDeleted
                 <Field label="Deleted By" value={visit.deleted_by} />
                 <Field label="Deleted Time" value={formatDateTime(visit.deleted_at)} />
               </div>
+            </div>
+
+            <div className="mb-1 border-t border-ink-50 pt-4">
+              <FollowUpTimeline visit={visit} />
             </div>
 
             {canManage && (
@@ -315,8 +318,11 @@ export default function VisitDetailsModal({ visit, onClose, onUpdated, onDeleted
 
             <InterestPicker value={form.interest} onChange={(val) => update("interest", val)} />
             <Textarea label="Report" value={form.report} onChange={(e) => update("report", e.target.value)} rows={3} />
-            <Input label="Follow-up Date" type="date" value={form.followup} onChange={(e) => update("followup", e.target.value)} />
             <Textarea label="Notes" value={form.notes} onChange={(e) => update("notes", e.target.value)} rows={3} />
+            <p className="text-xs font-body text-ink-400">
+              Follow-up scheduling has moved to the Follow-up Timeline below — close editing to add or update a
+              follow-up entry.
+            </p>
 
             <div className="flex gap-3">
               <Button variant="ghost" onClick={() => setMode("view")} disabled={isSaving}>

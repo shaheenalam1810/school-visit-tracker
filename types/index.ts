@@ -34,10 +34,20 @@ export interface VisitRecord extends VisitPayload {
   deleted?: string;
   deleted_by?: string;
   deleted_at?: string;
+  /** Status of the most recent (non-deleted) Follow-up entry for this
+   * visit, if any — computed server-side, not stored on the row. */
+  latest_followup_status?: FollowUpStatus | "";
 }
 
-/** Fields a visit edit is allowed to change. Kept in sync with the
- * Apps Script VISIT_EDITABLE_FIELDS list. */
+/**
+ * Fields a visit edit is allowed to change. Kept in sync with the
+ * Apps Script VISIT_EDITABLE_FIELDS list.
+ *
+ * "followup" (the single next-follow-up-date field captured at visit
+ * creation) is intentionally NOT editable here — scheduling follow-ups
+ * is now done through the dedicated multi-entry Follow-up Timeline
+ * (see FollowUpRecord) instead of editing this one field in place.
+ */
 export type VisitEditableFields = Pick<
   VisitPayload,
   | "school_name"
@@ -50,13 +60,42 @@ export type VisitEditableFields = Pick<
   | "current_software"
   | "interest"
   | "report"
-  | "followup"
   | "notes"
   | "google_map"
   | "latitude"
   | "longitude"
   | "accuracy"
 >;
+
+export type FollowUpType = "Phone Call" | "Physical Visit" | "WhatsApp" | "Email" | "Online Meeting";
+
+export type FollowUpStatus = "Pending" | "Completed" | "Interested" | "Not Interested" | "No Response";
+
+export interface FollowUpRecord {
+  followup_id: string;
+  visit_id: string;
+  followup_date: string;
+  next_followup_date?: string;
+  type: FollowUpType | "";
+  status: FollowUpStatus | "";
+  notes?: string;
+  created_by: string;
+  created_at?: string;
+  updated_by?: string;
+  updated_at?: string;
+  deleted?: string;
+  deleted_by?: string;
+  deleted_at?: string;
+}
+
+export interface FollowUpPayload {
+  visit_id: string;
+  followup_date: string;
+  next_followup_date: string;
+  type: FollowUpType | "";
+  status: FollowUpStatus | "";
+  notes: string;
+}
 
 export interface AuthUser {
   username: string;
