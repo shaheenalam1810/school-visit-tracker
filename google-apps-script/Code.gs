@@ -637,7 +637,9 @@ function handleUpdateVisit(body) {
  * Soft-deletes a visit: the row is kept (with deleted/deleted_by/
  * deleted_at stamped) so its timeline and audit trail remain
  * inspectable, but it is excluded from every normal visits query.
- * Admins may delete any visit; everyone else only their own.
+ * Admin only — ownership does not grant delete rights (unlike edit,
+ * which remains owner-or-admin). The requester's role is re-derived
+ * from the Users sheet; a role claimed by the client is never trusted.
  */
 function handleDeleteVisit(body) {
   const sheet = getVisitsSheet();
@@ -646,17 +648,14 @@ function handleDeleteVisit(body) {
   const requester = resolveRequester(body.requestedBy);
   if (requester.status !== "active") return { success: false, message: "Your account is disabled." };
 
+  if (requester.role !== "admin") {
+    return { success: false, message: "Only administrators can delete visits." };
+  }
+
   const found = findVisitRow(sheet, body.visit_id);
   if (!found) return { success: false, message: "Visit not found." };
 
   const headers = found.headers;
-  const ownerUsername = String(found.values[headers.indexOf("username")] || "").trim().toLowerCase();
-  const isOwner = ownerUsername === String(body.requestedBy || "").trim().toLowerCase();
-
-  if (requester.role !== "admin" && !isOwner) {
-    return { success: false, message: "You can only delete your own visits." };
-  }
-
   const deletedIdx = headers.indexOf("deleted");
   const deletedByIdx = headers.indexOf("deleted_by");
   const deletedAtIdx = headers.indexOf("deleted_at");

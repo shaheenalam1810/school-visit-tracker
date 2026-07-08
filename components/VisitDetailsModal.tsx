@@ -110,6 +110,9 @@ export default function VisitDetailsModal({ visit, onClose, onUpdated, onDeleted
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
+  const isAdmin = !!user && user.role === "admin";
+
+  // Edit permission is unchanged: visit owner or admin.
   const canManage =
     !!user &&
     (user.role === "admin" || (visit.username || "").trim().toLowerCase() === user.username.trim().toLowerCase());
@@ -174,7 +177,7 @@ export default function VisitDetailsModal({ visit, onClose, onUpdated, onDeleted
   }
 
   async function handleDelete() {
-    if (!user || !visit.visit_id) return;
+    if (!user || !visit.visit_id || !isAdmin) return;
     setIsDeleting(true);
     try {
       const res = await deleteVisit({ requestedBy: user.username, visit_id: visit.visit_id });
@@ -212,13 +215,15 @@ export default function VisitDetailsModal({ visit, onClose, onUpdated, onDeleted
                 <Button variant="ghost" onClick={startEdit}>
                   <Pencil className="h-4 w-4" /> Edit
                 </Button>
-                <Button
-                  variant="secondary"
-                  className="!bg-red-600 !text-white hover:!bg-red-700"
-                  onClick={() => setShowDeleteConfirm(true)}
-                >
-                  <Trash2 className="h-4 w-4" /> Delete
-                </Button>
+                {isAdmin && (
+                  <Button
+                    variant="secondary"
+                    className="!bg-red-600 !text-white hover:!bg-red-700"
+                    onClick={() => setShowDeleteConfirm(true)}
+                  >
+                    <Trash2 className="h-4 w-4" /> Delete
+                  </Button>
+                )}
               </div>
             )}
 
