@@ -6,6 +6,7 @@ import {
   Plus,
   CalendarCheck2,
   CalendarDays,
+  CalendarRange,
   ClipboardList,
   RefreshCw,
   School,
@@ -22,10 +23,11 @@ import Input from "@/components/Input";
 import StatCard from "@/components/StatCard";
 import Loader from "@/components/Loader";
 import VisitDetailsModal from "@/components/VisitDetailsModal";
+import FollowUpSection from "@/components/FollowUpSection";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { getVisits } from "@/lib/api";
-import { todayISO, currentMonthPrefix } from "@/lib/date";
+import { todayISO, currentMonthPrefix, isWithinLastDays } from "@/lib/date";
 import { VisitRecord } from "@/types";
 
 const interestBadge: Record<string, { icon: typeof Flame; classes: string }> = {
@@ -73,6 +75,11 @@ function DashboardContent() {
     [visits]
   );
 
+  const weeklyCount = useMemo(
+    () => visits.filter((v) => isWithinLastDays(v.date, 7)).length,
+    [visits]
+  );
+
   const monthlyCount = useMemo(
     () => visits.filter((v) => (v.date || "").startsWith(currentMonthPrefix())).length,
     [visits]
@@ -84,7 +91,7 @@ function DashboardContent() {
         if (dateFilter && v.date !== dateFilter) return false;
         if (search.trim()) {
           const q = search.trim().toLowerCase();
-          const haystack = `${v.school_name} ${v.visitor} ${v.notes}`.toLowerCase();
+          const haystack = `${v.school_name} ${v.visitor} ${v.mobile} ${v.executive} ${v.username} ${v.interest} ${v.date}`.toLowerCase();
           if (!haystack.includes(q)) return false;
         }
         return true;
@@ -112,12 +119,17 @@ function DashboardContent() {
         </button>
 
         {/* Stats */}
-        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatCard
             label="Today's Visits"
             value={isLoading ? "-" : todayCount}
             icon={<CalendarCheck2 className="h-6 w-6" />}
             accent="amber"
+          />
+          <StatCard
+            label="Weekly Visits"
+            value={isLoading ? "-" : weeklyCount}
+            icon={<CalendarRange className="h-6 w-6" />}
           />
           <StatCard
             label="Monthly Visits"
@@ -131,12 +143,14 @@ function DashboardContent() {
           />
         </div>
 
+        {!isLoading && <FollowUpSection visits={visits} onSelectVisit={setSelectedVisit} />}
+
         {/* Search + date filter */}
         <Card className="mb-5 flex flex-col gap-4">
           <Input
             label="Search"
             icon={<SearchIcon className="h-4 w-4" />}
-            placeholder="School, visitor, notes..."
+            placeholder="School, visitor, mobile, interest, date..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />

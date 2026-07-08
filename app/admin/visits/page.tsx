@@ -76,7 +76,7 @@ function VisitManagementContent() {
         if (interestFilter !== ALL && v.interest !== interestFilter) return false;
         if (search.trim()) {
           const q = search.trim().toLowerCase();
-          const haystack = `${v.school_name} ${v.visitor} ${v.executive}`.toLowerCase();
+          const haystack = `${v.school_name} ${v.visitor} ${v.mobile} ${v.executive} ${v.username} ${v.interest} ${v.date}`.toLowerCase();
           if (!haystack.includes(q)) return false;
         }
         return true;
@@ -93,7 +93,7 @@ function VisitManagementContent() {
           <Input
             label="Search"
             icon={<SearchIcon className="h-4 w-4" />}
-            placeholder="School, visitor, executive..."
+            placeholder="School, visitor, mobile, executive, interest, date..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />

@@ -4,8 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Users as UsersIcon,
+  UserCheck,
+  UserX,
   ClipboardList,
   CalendarCheck2,
+  CalendarRange,
   CalendarDays,
   Flame,
   Sun,
@@ -15,6 +18,8 @@ import {
   Settings,
   ListChecks,
   History,
+  BarChart3,
+  FileDown,
 } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import TopBar from "@/components/TopBar";
@@ -24,11 +29,21 @@ import Button from "@/components/Button";
 import StatCard from "@/components/StatCard";
 import Loader from "@/components/Loader";
 import VisitDetailsModal from "@/components/VisitDetailsModal";
+import FollowUpSection from "@/components/FollowUpSection";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { getUsers, getVisits } from "@/lib/api";
-import { todayISO, currentMonthPrefix } from "@/lib/date";
+import { todayISO, currentMonthPrefix, isWithinLastDays } from "@/lib/date";
 import { UserRecord, VisitRecord } from "@/types";
+
+type RankPeriod = "today" | "week" | "month" | "total";
+
+const RANK_TABS: { label: string; value: RankPeriod }[] = [
+  { label: "Today", value: "today" },
+  { label: "Week", value: "week" },
+  { label: "Month", value: "month" },
+  { label: "Total", value: "total" },
+];
 
 function AdminDashboardContent() {
   const { user } = useAuth();
@@ -41,6 +56,7 @@ function AdminDashboardContent() {
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState("");
   const [selectedVisit, setSelectedVisit] = useState<VisitRecord | null>(null);
+  const [rankPeriod, setRankPeriod] = useState<RankPeriod>("total");
 
   useEffect(() => {
     if (!user) return;
@@ -67,10 +83,18 @@ function AdminDashboardContent() {
     [visits]
   );
 
+  const weeklyCount = useMemo(
+    () => visits.filter((v) => isWithinLastDays(v.date, 7)).length,
+    [visits]
+  );
+
   const monthlyCount = useMemo(
     () => visits.filter((v) => (v.date || "").startsWith(currentMonthPrefix())).length,
     [visits]
   );
+
+  const activeUsers = useMemo(() => users.filter((u) => u.status === "active").length, [users]);
+  const inactiveUsers = useMemo(() => users.filter((u) => u.status === "disabled").length, [users]);
 
   const interestCounts = useMemo(() => {
     const counts = { Hot: 0, Warm: 0, Cold: 0 };
@@ -82,9 +106,16 @@ function AdminDashboardContent() {
     return counts;
   }, [visits]);
 
+  const rankPeriodVisits = useMemo(() => {
+    if (rankPeriod === "today") return visits.filter((v) => v.date === todayISO());
+    if (rankPeriod === "week") return visits.filter((v) => isWithinLastDays(v.date, 7));
+    if (rankPeriod === "month") return visits.filter((v) => (v.date || "").startsWith(currentMonthPrefix()));
+    return visits;
+  }, [visits, rankPeriod]);
+
   const ranking = useMemo(() => {
     const map = new Map<string, { name: string; count: number }>();
-    visits.forEach((v) => {
+    rankPeriodVisits.forEach((v) => {
       const key = (v.username || v.executive || "unknown").toLowerCase();
       const existing = map.get(key);
       if (existing) {
@@ -96,7 +127,7 @@ function AdminDashboardContent() {
     return Array.from(map.values())
       .sort((a, b) => b.count - a.count)
       .slice(0, 10);
-  }, [visits]);
+  }, [rankPeriodVisits]);
 
   const filteredVisits = useMemo(() => {
     return visits
@@ -104,7 +135,7 @@ function AdminDashboardContent() {
         if (dateFilter && v.date !== dateFilter) return false;
         if (search.trim()) {
           const q = search.trim().toLowerCase();
-          const haystack = `${v.school_name} ${v.visitor} ${v.executive} ${v.username}`.toLowerCase();
+          const haystack = `${v.school_name} ${v.visitor} ${v.mobile} ${v.executive} ${v.username} ${v.interest} ${v.date}`.toLowerCase();
           if (!haystack.includes(q)) return false;
         }
         return true;
@@ -126,25 +157,42 @@ function AdminDashboardContent() {
             <ListChecks className="h-4 w-4" /> Manage Visits
           </Button>
         </div>
+        <div className="mb-3 grid grid-cols-2 gap-3">
+          <Button variant="ghost" onClick={() => router.push("/admin/analytics")}>
+            <BarChart3 className="h-4 w-4" /> Analytics
+          </Button>
+          <Button variant="ghost" onClick={() => router.push("/admin/reports")}>
+            <FileDown className="h-4 w-4" /> Reports
+          </Button>
+        </div>
         <div className="mb-5">
           <Button variant="ghost" onClick={() => router.push("/admin/activity")}>
             <History className="h-4 w-4" /> Activity Log
           </Button>
         </div>
 
-        {/* Core stats */}
-        <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {/* People stats */}
+        <div className="mb-3 grid grid-cols-3 gap-3">
           <StatCard
             label="Total Users"
             value={isLoading ? "-" : users.length}
-            icon={<UsersIcon className="h-6 w-6" />}
+            icon={<UsersIcon className="h-5 w-5" />}
             accent="amber"
           />
           <StatCard
-            label="Total Visits"
-            value={isLoading ? "-" : visits.length}
-            icon={<ClipboardList className="h-6 w-6" />}
+            label="Active"
+            value={isLoading ? "-" : activeUsers}
+            icon={<UserCheck className="h-5 w-5" />}
           />
+          <StatCard
+            label="Inactive"
+            value={isLoading ? "-" : inactiveUsers}
+            icon={<UserX className="h-5 w-5" />}
+          />
+        </div>
+
+        {/* Visit stats */}
+        <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatCard
             label="Today's Visits"
             value={isLoading ? "-" : todayCount}
@@ -152,9 +200,19 @@ function AdminDashboardContent() {
             accent="amber"
           />
           <StatCard
+            label="Weekly Visits"
+            value={isLoading ? "-" : weeklyCount}
+            icon={<CalendarRange className="h-6 w-6" />}
+          />
+          <StatCard
             label="Monthly Visits"
             value={isLoading ? "-" : monthlyCount}
             icon={<CalendarDays className="h-6 w-6" />}
+          />
+          <StatCard
+            label="Total Visits"
+            value={isLoading ? "-" : visits.length}
+            icon={<ClipboardList className="h-6 w-6" />}
           />
         </div>
 
@@ -170,16 +228,31 @@ function AdminDashboardContent() {
           <StatCard label="Cold" value={isLoading ? "-" : interestCounts.Cold} icon={<Snowflake className="h-5 w-5" />} />
         </div>
 
-        {/* User ranking */}
+        {/* Top performer */}
         <Card className="mb-5">
-          <div className="mb-3 flex items-center gap-2">
-            <Trophy className="h-4 w-4 text-amber-500" />
-            <h2 className="font-display text-sm font-bold text-ink-900">User Ranking</h2>
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Trophy className="h-4 w-4 text-amber-500" />
+              <h2 className="font-display text-sm font-bold text-ink-900">Top Performer</h2>
+            </div>
+          </div>
+          <div className="mb-3 grid grid-cols-4 gap-1.5">
+            {RANK_TABS.map((tab) => (
+              <button
+                key={tab.value}
+                onClick={() => setRankPeriod(tab.value)}
+                className={`rounded-lg py-1.5 text-xs font-semibold transition ${
+                  rankPeriod === tab.value ? "bg-ink-800 text-white" : "bg-ink-50 text-ink-600"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
           {isLoading ? (
             <Loader label="Loading ranking..." />
           ) : ranking.length === 0 ? (
-            <p className="text-sm font-body text-ink-400">No visits logged yet.</p>
+            <p className="text-sm font-body text-ink-400">No visits logged for this period.</p>
           ) : (
             <div className="flex flex-col gap-2">
               {ranking.map((r, i) => (
@@ -197,12 +270,14 @@ function AdminDashboardContent() {
           )}
         </Card>
 
+        {!isLoading && <FollowUpSection visits={visits} onSelectVisit={setSelectedVisit} />}
+
         {/* Search + date filter */}
         <Card className="mb-5 flex flex-col gap-4">
           <Input
             label="Search"
             icon={<SearchIcon className="h-4 w-4" />}
-            placeholder="School, visitor, executive..."
+            placeholder="School, visitor, mobile, executive, interest, date..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
