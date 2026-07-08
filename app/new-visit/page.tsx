@@ -14,14 +14,12 @@ import InterestPicker from "@/components/InterestPicker";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { submitVisit } from "@/lib/api";
+import { todayISO } from "@/lib/date";
 import { VisitPayload } from "@/types";
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-const EMPTY_FORM = (executiveName: string): VisitPayload => ({
+const EMPTY_FORM = (executiveName: string, username: string): VisitPayload => ({
   date: todayISO(),
+  username,
   executive: executiveName,
   school_name: "",
   visitor: "",
@@ -58,7 +56,9 @@ function NewVisitContent() {
   const { showSuccess, showError } = useToast();
   const router = useRouter();
 
-  const [form, setForm] = useState<VisitPayload>(() => EMPTY_FORM(user?.name || ""));
+  const [form, setForm] = useState<VisitPayload>(() =>
+    EMPTY_FORM(user?.name || "", user?.username || "")
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isLocationCaptured = Boolean(form.latitude && form.longitude);
 

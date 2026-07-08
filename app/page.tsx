@@ -11,7 +11,11 @@ export default function Home() {
 
   useEffect(() => {
     if (isLoading) return;
-    router.replace(user ? "/dashboard" : "/login");
+    if (!user) {
+      router.replace("/login");
+      return;
+    }
+    router.replace(user.role === "admin" ? "/admin" : "/dashboard");
   }, [isLoading, user, router]);
 
   return <Loader label="Loading School Visit Tracker..." />;

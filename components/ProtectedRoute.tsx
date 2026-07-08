@@ -5,17 +5,27 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import Loader from "./Loader";
 
-export default function ProtectedRoute({ children }: { children: ReactNode }) {
+interface ProtectedRouteProps {
+  children: ReactNode;
+  adminOnly?: boolean;
+}
+
+export default function ProtectedRoute({ children, adminOnly = false }: ProtectedRouteProps) {
   const { user, isLoading } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    if (!isLoading && !user) {
+    if (isLoading) return;
+    if (!user) {
       router.replace("/login");
+      return;
     }
-  }, [isLoading, user, router]);
+    if (adminOnly && user.role !== "admin") {
+      router.replace("/dashboard");
+    }
+  }, [isLoading, user, adminOnly, router]);
 
-  if (isLoading || !user) {
+  if (isLoading || !user || (adminOnly && user.role !== "admin")) {
     return <Loader label="Checking your session..." />;
   }
 

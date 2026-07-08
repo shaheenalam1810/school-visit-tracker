@@ -8,7 +8,7 @@ import {
   ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { AuthUser } from "@/types";
+import { AuthUser, UserRole, UserStatus } from "@/types";
 import { loginRequest } from "@/lib/api";
 import { persistUser, readPersistedUser, clearPersistedUser } from "@/lib/auth";
 
@@ -19,7 +19,7 @@ interface AuthContextValue {
     username: string,
     password: string,
     remember: boolean
-  ) => Promise<{ success: boolean; message?: string }>;
+  ) => Promise<{ success: boolean; message?: string; user?: AuthUser }>;
   logout: () => void;
 }
 
@@ -40,10 +40,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const res = await loginRequest(username, password);
       if (res.success) {
-        const authUser: AuthUser = { username, name: res.name || username };
+        const authUser: AuthUser = {
+          username,
+          name: res.name || username,
+          role: (res.role as UserRole) || "user",
+          status: (res.status as UserStatus) || "active",
+        };
         setUser(authUser);
         persistUser(authUser, remember);
-        return { success: true };
+        return { success: true, user: authUser };
       }
       return { success: false, message: res.message || "Invalid username or password." };
     } catch (err) {

@@ -2,6 +2,8 @@ import axios from "axios";
 import {
   ApiResponse,
   LoginResponse,
+  UserRecord,
+  UserRole,
   VisitPayload,
   VisitRecord,
 } from "@/types";
@@ -32,7 +34,8 @@ const apiClient = axios.create({
 });
 
 /**
- * Logs a marketing executive in against the "Users" sheet.
+ * Logs a user in against the "Users" sheet. Disabled accounts and bad
+ * credentials both come back as success: false.
  */
 export async function loginRequest(
   username: string,
@@ -48,6 +51,8 @@ export async function loginRequest(
 
 /**
  * Submits a new school visit. Appended as a new row in the "Visits" sheet.
+ * Rejected server-side if the same school_name + latitude + longitude
+ * has already been logged.
  */
 export async function submitVisit(
   payload: VisitPayload
@@ -60,16 +65,75 @@ export async function submitVisit(
 }
 
 /**
- * Fetches all visit rows from the "Visits" sheet.
- * Filtering (today / by executive) is done client-side so the
- * Apps Script endpoint can stay a single simple GET.
+ * Fetches visit rows from the "Visits" sheet. Admins get every row;
+ * everyone else only gets rows tagged with their own username — the
+ * scoping happens server-side in Code.gs.
  */
-export async function getVisits(): Promise<VisitRecord[]> {
+export async function getVisits(
+  username: string,
+  role: UserRole
+): Promise<VisitRecord[]> {
   const res = await apiClient.get("", {
-    params: { action: "visits" },
+    params: { action: "visits", username, role },
   });
   const data = res.data as ApiResponse<VisitRecord[]>;
   return data.data || [];
+}
+
+/** Lists all users. Admin only (enforced server-side). */
+export async function getUsers(requestedBy: string): Promise<UserRecord[]> {
+  const res = await apiClient.get("", {
+    params: { action: "listUsers", requestedBy },
+  });
+  const data = res.data as ApiResponse<UserRecord[]>;
+  return data.data || [];
+}
+
+export async function addUser(payload: {
+  requestedBy: string;
+  username: string;
+  password: string;
+  name: string;
+  role: UserRole;
+}): Promise<ApiResponse> {
+  const res = await apiClient.post("", { action: "addUser", ...payload });
+  return res.data as ApiResponse;
+}
+
+export async function updateUser(payload: {
+  requestedBy: string;
+  username: string;
+  name: string;
+  role: UserRole;
+}): Promise<ApiResponse> {
+  const res = await apiClient.post("", { action: "updateUser", ...payload });
+  return res.data as ApiResponse;
+}
+
+export async function setUserStatus(payload: {
+  requestedBy: string;
+  username: string;
+  status: "active" | "disabled";
+}): Promise<ApiResponse> {
+  const res = await apiClient.post("", { action: "setUserStatus", ...payload });
+  return res.data as ApiResponse;
+}
+
+export async function deleteUser(payload: {
+  requestedBy: string;
+  username: string;
+}): Promise<ApiResponse> {
+  const res = await apiClient.post("", { action: "deleteUser", ...payload });
+  return res.data as ApiResponse;
+}
+
+export async function resetPassword(payload: {
+  requestedBy: string;
+  username: string;
+  newPassword: string;
+}): Promise<ApiResponse> {
+  const res = await apiClient.post("", { action: "resetPassword", ...payload });
+  return res.data as ApiResponse;
 }
 
 export default apiClient;

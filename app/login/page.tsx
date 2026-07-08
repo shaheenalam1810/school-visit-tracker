@@ -22,7 +22,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && user) {
-      router.replace("/dashboard");
+      router.replace(user.role === "admin" ? "/admin" : "/dashboard");
     }
   }, [isLoading, user, router]);
 
@@ -36,9 +36,9 @@ export default function LoginPage() {
     const result = await login(username.trim(), password, remember);
     setIsSubmitting(false);
 
-    if (result.success) {
+    if (result.success && result.user) {
       showSuccess("Welcome back! Redirecting to your dashboard...");
-      router.replace("/dashboard");
+      router.replace(result.user.role === "admin" ? "/admin" : "/dashboard");
     } else {
       showError(result.message || "Login failed. Please try again.");
     }
