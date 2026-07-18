@@ -1,16 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { BarChart3, Users as UsersIcon, Flame } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import TopBar from "@/components/TopBar";
 import Card from "@/components/Card";
 import Loader from "@/components/Loader";
-import BarChart, { BarChartDatum } from "@/components/BarChart";
+import type { BarChartDatum } from "@/components/BarChart";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { getVisits } from "@/lib/api";
 import { VisitRecord } from "@/types";
+
+const BarChart = dynamic(() => import("@/components/BarChart"), {
+  ssr: false,
+  loading: () => <div className="h-32 animate-pulse rounded-lg bg-ink-50" />,
+});
 
 const MONTHS_TO_SHOW = 6;
 const TOP_USERS_TO_SHOW = 8;

@@ -27,7 +27,10 @@ interface FollowUpTimelineProps {
   visit: VisitRecord;
 }
 
-const TYPE_OPTIONS: { label: string; value: FollowUpType }[] = [
+// Exported so other follow-up UIs (e.g. the Daily Follow-up Dashboard's
+// edit modal) reuse the exact same option lists/icons instead of a
+// second, driftable copy.
+export const TYPE_OPTIONS: { label: string; value: FollowUpType }[] = [
   { label: "Phone Call", value: "Phone Call" },
   { label: "Physical Visit", value: "Physical Visit" },
   { label: "WhatsApp", value: "WhatsApp" },
@@ -35,15 +38,16 @@ const TYPE_OPTIONS: { label: string; value: FollowUpType }[] = [
   { label: "Online Meeting", value: "Online Meeting" },
 ];
 
-const STATUS_OPTIONS: { label: string; value: FollowUpStatus }[] = [
+export const STATUS_OPTIONS: { label: string; value: FollowUpStatus }[] = [
   { label: "Pending", value: "Pending" },
   { label: "Completed", value: "Completed" },
   { label: "Interested", value: "Interested" },
   { label: "Not Interested", value: "Not Interested" },
   { label: "No Response", value: "No Response" },
+  { label: "Cancelled", value: "Cancelled" },
 ];
 
-const TYPE_ICON: Record<string, typeof Phone> = {
+export const TYPE_ICON: Record<string, typeof Phone> = {
   "Phone Call": Phone,
   "Physical Visit": MapPinned,
   WhatsApp: MessageCircle,
@@ -57,6 +61,7 @@ const STATUS_CLASSES: Record<string, string> = {
   Interested: "bg-red-50 text-red-600",
   "Not Interested": "bg-ink-50 text-ink-500",
   "No Response": "bg-purple-50 text-purple-600",
+  Cancelled: "bg-ink-50 text-ink-500",
 };
 
 const DOT_CLASSES: Record<string, string> = {
@@ -65,6 +70,7 @@ const DOT_CLASSES: Record<string, string> = {
   Interested: "bg-red-500",
   "Not Interested": "bg-ink-400",
   "No Response": "bg-purple-500",
+  Cancelled: "bg-ink-400",
 };
 
 type FollowUpForm = {

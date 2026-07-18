@@ -13,6 +13,10 @@
  *   8. A Follow-up Timeline: each visit can have unlimited follow-up
  *      entries (date, next date, type, status, notes), independent of
  *      the single legacy "followup" field captured at visit creation
+ *   9. A Daily Follow-up Dashboard (action=followupdashboard): every
+ *      follow-up entry the caller may see, joined with its visit and
+ *      auto-bucketed (overdue/today/tomorrow/upcoming/completed/
+ *      cancelled) for the Next.js /followups page
  *
  * Four sheets are used: "Visits", "Users", "ActivityLog", "FollowUps".
  * "ActivityLog" and "FollowUps" are created automatically the first
@@ -20,6 +24,22 @@
  * Existing spreadsheets set up before any of this existed are migrated
  * automatically (missing columns are added in place, existing rows/
  * data are preserved).
+ *
+ * PERFORMANCE NOTES
+ * -----------------------------------------------------------
+ * Two caching layers keep Sheets API calls to a minimum:
+ *   - Per-invocation memoization (`_sheetCache`, reset at the top of
+ *     every doGet/doPost): each sheet's raw values are read via
+ *     getDataRange().getValues() at most ONCE per request, no matter
+ *     how many handlers/helpers need them.
+ *   - Cross-request caching via CacheService: the fully-computed visits
+ *     list (already merged with follow-up data) and the raw Users rows
+ *     are cached script-wide. Every mutating handler invalidates the
+ *     relevant cache entry immediately after a successful write, so
+ *     the TTL is just a safety net, not the source of freshness.
+ * Never read a sheet's data directly with getDataRange().getValues() —
+ * always go through getVisitsRawValues/getUsersRawValues/
+ * getFollowUpsRawValues so the memoization actually applies.
  *
  * SECURITY NOTE: every request re-derives the caller's role/status by
  * looking them up in the Users sheet by username. A `role` sent by the
@@ -135,6 +155,21 @@ const FOLLOWUP_FIELDS = [
   "deleted_at",
 ];
 
+// Cross-request cache keys + TTL. CacheService caps TTL at 21600s (6h);
+// that's fine here because every mutating handler removes the relevant
+// key immediately on success, so the TTL only matters as a fallback.
+const VISITS_CACHE_KEY = "svt_visits_data_v1";
+const USERS_RAW_CACHE_KEY = "svt_users_raw_v1";
+const CACHE_TTL_SECONDS = 21600;
+
+// Per-invocation memoization. Reset at the top of doGet/doPost so state
+// never leaks between requests, but reused freely within one request.
+let _sheetCache = {};
+
+function resetInvocationCache() {
+  _sheetCache = {};
+}
+
 /**
  * One-time setup: creates the sheets and headers if they don't exist.
  * Run this manually from the Apps Script editor.
@@ -182,13 +217,20 @@ function setup() {
 
 /**
  * Handles GET requests.
+ *   ?action=dashboard&username=...         -> { visits, users, role, status } in one call
  *   ?action=visits&username=...            -> visits (all for admin, own for user)
  *   ?action=listUsers&requestedBy=...      -> all users (admin only)
  *   ?action=activityLog&requestedBy=...    -> activity log rows (admin only)
  *   ?action=followups&visit_id=...&requestedBy=...  -> follow-up history for one visit
+ *   ?action=followupdashboard&username=...  -> every follow-up the caller may see, joined with its visit
  */
 function doGet(e) {
+  resetInvocationCache();
   const action = (e.parameter.action || "").toLowerCase();
+
+  if (action === "dashboard") {
+    return jsonResponse(handleGetDashboard(e));
+  }
 
   if (action === "visits") {
     return jsonResponse({ success: true, data: handleGetVisits(e) });
@@ -206,6 +248,10 @@ function doGet(e) {
     return jsonResponse(handleGetFollowUps(e));
   }
 
+  if (action === "followupdashboard") {
+    return jsonResponse(handleGetFollowUpDashboard(e));
+  }
+
   return jsonResponse({ success: true, message: "School Visit Tracker API is running." });
 }
 
@@ -214,6 +260,8 @@ function doGet(e) {
  * Next.js app (to avoid CORS pre-flight) and parsed manually here.
  */
 function doPost(e) {
+  resetInvocationCache();
+
   let body;
   try {
     body = JSON.parse(e.postData.contents);
@@ -257,18 +305,86 @@ function doPost(e) {
 }
 
 // ---------------------------------------------------------------------
+// Cross-request cache helpers (CacheService)
+// ---------------------------------------------------------------------
+
+function getCache_() {
+  return CacheService.getScriptCache();
+}
+
+/** Reads + JSON.parses a cache entry. Never throws — a cache miss/error just returns null. */
+function cacheGetJson_(key) {
+  try {
+    const raw = getCache_().get(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
+ * Writes a JSON-serialized cache entry. Never throws: CacheService
+ * rejects values over 100KB, which would otherwise break the request
+ * that triggered the (fresh, still-valid) sheet read.
+ */
+function cachePutJson_(key, obj) {
+  try {
+    getCache_().put(key, JSON.stringify(obj), CACHE_TTL_SECONDS);
+  } catch (err) {
+    // Too large for the cache or the cache is temporarily unavailable —
+    // safe to skip, the caller already has the fresh data it needs.
+  }
+}
+
+function cacheRemove_(key) {
+  try {
+    getCache_().remove(key);
+  } catch (err) {
+    // Best-effort invalidation; a stale hit will still self-heal once the TTL expires.
+  }
+}
+
+/** Invalidates the visits cache. Call after any visit or follow-up write. */
+function invalidateVisitsCache() {
+  delete _sheetCache.allVisitsComputed;
+  delete _sheetCache.visitsRaw;
+  delete _sheetCache.followUpsRaw;
+  cacheRemove_(VISITS_CACHE_KEY);
+}
+
+/** Invalidates the Users cache. Call after any user-management write. */
+function invalidateUsersCache() {
+  delete _sheetCache.usersRaw;
+  cacheRemove_(USERS_RAW_CACHE_KEY);
+}
+
+// ---------------------------------------------------------------------
 // Sheet access + schema migration helpers
 // ---------------------------------------------------------------------
 
+/**
+ * Returns the Visits sheet. Schema migration is checked (and memoized)
+ * at most once per request, no matter how many times this is called.
+ */
 function getVisitsSheet() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(VISITS_SHEET_NAME);
-  if (sheet) ensureVisitsSheetSchema(sheet);
+  if (sheet && !_sheetCache.visitsSchemaEnsured) {
+    ensureVisitsSheetSchema(sheet);
+    _sheetCache.visitsSchemaEnsured = true;
+  }
   return sheet;
 }
 
+/**
+ * Returns the Users sheet. Schema migration is checked (and memoized)
+ * at most once per request, no matter how many times this is called.
+ */
 function getUsersSheet() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(USERS_SHEET_NAME);
-  if (sheet) ensureUsersSheetSchema(sheet);
+  if (sheet && !_sheetCache.usersSchemaEnsured) {
+    ensureUsersSheetSchema(sheet);
+    _sheetCache.usersSchemaEnsured = true;
+  }
   return sheet;
 }
 
@@ -303,6 +419,46 @@ function getFollowUpsSheet() {
 }
 
 /**
+ * Returns this request's memoized full values (header row + data rows)
+ * for the Visits sheet, reading it from the sheet at most once.
+ */
+function getVisitsRawValues(sheet) {
+  if (!_sheetCache.visitsRaw) {
+    _sheetCache.visitsRaw = sheet.getLastRow() === 0 ? [] : sheet.getDataRange().getValues();
+  }
+  return _sheetCache.visitsRaw;
+}
+
+/**
+ * Returns this request's memoized full values (header row + data rows)
+ * for the FollowUps sheet, reading it from the sheet at most once.
+ */
+function getFollowUpsRawValues(sheet) {
+  if (!_sheetCache.followUpsRaw) {
+    _sheetCache.followUpsRaw = sheet.getLastRow() === 0 ? [] : sheet.getDataRange().getValues();
+  }
+  return _sheetCache.followUpsRaw;
+}
+
+/**
+ * Returns the Users sheet's full values, memoized for this request AND
+ * cached cross-request via CacheService (Users rows are plain strings,
+ * so there's no Date-serialization ambiguity in round-tripping them
+ * through JSON, unlike Visits/FollowUps which contain real Date cells).
+ */
+function getUsersRawValues(sheet) {
+  if (_sheetCache.usersRaw) return _sheetCache.usersRaw;
+
+  let values = cacheGetJson_(USERS_RAW_CACHE_KEY);
+  if (!values) {
+    values = sheet.getLastRow() === 0 ? [] : sheet.getDataRange().getValues();
+    cachePutJson_(USERS_RAW_CACHE_KEY, values);
+  }
+  _sheetCache.usersRaw = values;
+  return values;
+}
+
+/**
  * Adds any missing Visits columns (username, timeline/system fields)
  * to an existing sheet without touching existing data.
  */
@@ -311,8 +467,7 @@ function ensureVisitsSheetSchema(sheet) {
     visit_id: function () {
       return Utilities.getUuid();
     },
-    created_by: function (rowNum) {
-      const headers = getHeaders(sheet);
+    created_by: function (rowNum, headers) {
       const usernameCol = headers.indexOf("username");
       return usernameCol === -1 ? "" : sheet.getRange(rowNum, usernameCol + 1).getValue();
     },
@@ -336,13 +491,20 @@ function ensureUsersSheetSchema(sheet) {
 /**
  * Ensures `sheet` has every header in `requiredHeaders`. Missing
  * headers are appended as new columns; existing rows are backfilled
- * using `defaults[header]` (a static value or a function(rowNumber)).
+ * using `defaults[header]` (a static value or a function(rowNumber, headersAtThatPoint)).
+ *
+ * Reads the header row exactly ONCE (not once per required header —
+ * that was previously the single biggest source of Sheets API calls,
+ * since it ran unconditionally on every request via getVisitsSheet()/
+ * getUsersSheet()). The in-memory `headers` array is kept in sync as
+ * columns are appended, so no re-read is ever needed.
  */
 function ensureColumns(sheet, requiredHeaders, defaults) {
   if (sheet.getLastRow() === 0) return;
 
+  let headers = getHeaders(sheet);
+
   requiredHeaders.forEach(function (header) {
-    const headers = getHeaders(sheet);
     if (headers.indexOf(header) !== -1) return;
 
     const newColIndex = sheet.getLastColumn() + 1;
@@ -356,11 +518,17 @@ function ensureColumns(sheet, requiredHeaders, defaults) {
       for (let i = 0; i < numRows; i++) {
         const rowNum = i + 2;
         const value =
-          typeof defaultSpec === "function" ? defaultSpec(rowNum) : defaultSpec !== undefined ? defaultSpec : "";
+          typeof defaultSpec === "function"
+            ? defaultSpec(rowNum, headers)
+            : defaultSpec !== undefined
+            ? defaultSpec
+            : "";
         values.push([value]);
       }
       sheet.getRange(2, newColIndex, numRows, 1).setValues(values);
     }
+
+    headers = headers.concat([header]);
   });
 }
 
@@ -388,7 +556,8 @@ function appendRowByHeaders(sheet, headers, valueMap) {
  */
 function findUserRow(sheet, username) {
   if (!sheet || !username) return null;
-  const values = sheet.getDataRange().getValues();
+  const values = getUsersRawValues(sheet);
+  if (values.length === 0) return null;
   const headers = values[0];
   const userCol = headers.indexOf("username");
   for (let i = 1; i < values.length; i++) {
@@ -404,7 +573,8 @@ function findUserRow(sheet, username) {
  */
 function findVisitRow(sheet, visitId) {
   if (!sheet || !visitId) return null;
-  const values = sheet.getDataRange().getValues();
+  const values = getVisitsRawValues(sheet);
+  if (values.length === 0) return null;
   const headers = values[0];
   const idCol = headers.indexOf("visit_id");
   if (idCol === -1) return null;
@@ -421,7 +591,8 @@ function findVisitRow(sheet, visitId) {
  */
 function findFollowUpRow(sheet, followupId) {
   if (!sheet || !followupId) return null;
-  const values = sheet.getDataRange().getValues();
+  const values = getFollowUpsRawValues(sheet);
+  if (values.length === 0) return null;
   const headers = values[0];
   const idCol = headers.indexOf("followup_id");
   if (idCol === -1) return null;
@@ -519,8 +690,60 @@ function handleLogin(username, password) {
 }
 
 // ---------------------------------------------------------------------
+// Dashboard (merged endpoint)
+// ---------------------------------------------------------------------
+
+/**
+ * Combines the visits list + (for admins) the users list into a single
+ * response, so pages that need both no longer have to make two
+ * separate Apps Script requests (each of which spins up its own
+ * execution and re-authenticates the caller from scratch).
+ */
+function handleGetDashboard(e) {
+  const username = e.parameter.username || "";
+  const requester = resolveRequester(username);
+
+  const visits = scopeVisitsForRequester(getAllVisitsCached(), username, requester);
+
+  let users = [];
+  if (requester.status === "active" && requester.role === "admin") {
+    users = getUsersList();
+  }
+
+  return {
+    success: true,
+    data: {
+      visits: visits,
+      users: users,
+      role: requester.role,
+      status: requester.status,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------
 // Visits
 // ---------------------------------------------------------------------
+
+/**
+ * Filters the full (cached) visits list down to what `username`/
+ * `requester` are allowed to see: every non-deleted row for an active
+ * admin, only their own rows for anyone else, nothing for an inactive
+ * or unrecognized account.
+ */
+function scopeVisitsForRequester(allVisits, username, requester) {
+  const nonDeleted = allVisits.filter(function (v) {
+    return v.deleted !== "true";
+  });
+
+  if (requester.status !== "active") return [];
+  if (requester.role === "admin") return nonDeleted;
+  if (!username) return [];
+
+  return nonDeleted.filter(function (v) {
+    return String(v.username || "").trim().toLowerCase() === String(username).trim().toLowerCase();
+  });
+}
 
 /**
  * Returns visits scoped to the requester: all rows for an admin, only
@@ -531,17 +754,7 @@ function handleLogin(username, password) {
 function handleGetVisits(e) {
   const username = e.parameter.username || "";
   const requester = resolveRequester(username);
-  const all = getAllVisits().filter(function (v) {
-    return v.deleted !== "true";
-  });
-
-  if (requester.status !== "active") return [];
-  if (requester.role === "admin") return all;
-  if (!username) return [];
-
-  return all.filter(function (v) {
-    return String(v.username || "").trim().toLowerCase() === String(username).trim().toLowerCase();
-  });
+  return scopeVisitsForRequester(getAllVisitsCached(), username, requester);
 }
 
 /**
@@ -555,9 +768,10 @@ function handleAddVisit(body) {
     return { success: false, message: "Visits sheet not found. Run setup() first." };
   }
 
-  const headers = getHeaders(sheet);
+  const raw = getVisitsRawValues(sheet);
+  const headers = raw.length > 0 ? raw[0] : getHeaders(sheet);
 
-  if (isDuplicateVisit(sheet, headers, body.school_name, body.latitude, body.longitude)) {
+  if (isDuplicateVisit(raw, headers, body.school_name, body.latitude, body.longitude)) {
     return {
       success: false,
       message: "This school visit (same school and location) has already been logged.",
@@ -573,6 +787,7 @@ function handleAddVisit(body) {
   valueMap.created_by = body.username || "";
 
   appendRowByHeaders(sheet, headers, valueMap);
+  invalidateVisitsCache();
   logActivity(body.username, "created a visit", String(body.school_name || ""));
 
   return { success: true, message: "Visit saved." };
@@ -627,6 +842,8 @@ function handleUpdateVisit(body) {
   if (updatedByIdx !== -1) sheet.getRange(found.rowIndex, updatedByIdx + 1).setValue(body.requestedBy || "");
   if (updatedAtIdx !== -1) sheet.getRange(found.rowIndex, updatedAtIdx + 1).setValue(new Date());
 
+  invalidateVisitsCache();
+
   const schoolName = found.values[headers.indexOf("school_name")] || "";
   logActivity(body.requestedBy, "edited a visit", schoolName + " — " + changes.join("; "));
 
@@ -663,6 +880,8 @@ function handleDeleteVisit(body) {
   if (deletedByIdx !== -1) sheet.getRange(found.rowIndex, deletedByIdx + 1).setValue(body.requestedBy || "");
   if (deletedAtIdx !== -1) sheet.getRange(found.rowIndex, deletedAtIdx + 1).setValue(new Date());
 
+  invalidateVisitsCache();
+
   const schoolName = found.values[headers.indexOf("school_name")] || "";
   logActivity(body.requestedBy, "deleted a visit", String(schoolName));
 
@@ -695,9 +914,9 @@ function handleGetFollowUps(e) {
   }
 
   const sheet = getFollowUpsSheet();
-  if (sheet.getLastRow() < 2) return { success: true, data: [] };
+  const values = getFollowUpsRawValues(sheet);
+  if (values.length < 2) return { success: true, data: [] };
 
-  const values = sheet.getDataRange().getValues();
   const headers = values[0];
   const data = values
     .slice(1)
@@ -718,6 +937,126 @@ function handleGetFollowUps(e) {
     });
 
   return { success: true, data: data };
+}
+
+/**
+ * Returns every non-deleted follow-up entry the caller may see (all of
+ * them for an active admin, only entries on their own visits for
+ * anyone else), each joined with its parent visit's fields so the
+ * Daily Follow-up Dashboard can render + open a visit without a second
+ * request. Permission is enforced by construction: a follow-up is only
+ * included if its visit_id is present in the caller's own
+ * scopeVisitsForRequester() result — the same scoping already used by
+ * handleGetVisits/handleGetDashboard — so a role/username claimed by
+ * the client can never widen what comes back.
+ *
+ * Each entry also gets a server-computed `bucket` (overdue/today/
+ * tomorrow/upcoming/completed/cancelled) per the Auto Status rule: a
+ * past-due next_followup_date is "overdue" unless the entry's own
+ * status is already Completed or Cancelled, in which case that wins.
+ */
+function handleGetFollowUpDashboard(e) {
+  const username = e.parameter.username || e.parameter.requestedBy || "";
+  const requester = resolveRequester(username);
+  if (requester.status !== "active") {
+    return { success: true, data: emptyFollowUpDashboard() };
+  }
+
+  const scopedVisits = scopeVisitsForRequester(getAllVisitsCached(), username, requester);
+  const visitMap = {};
+  scopedVisits.forEach(function (v) {
+    if (v.visit_id) visitMap[v.visit_id] = v;
+  });
+
+  const sheet = getFollowUpsSheet();
+  const raw = getFollowUpsRawValues(sheet);
+  if (raw.length < 2) {
+    return { success: true, data: emptyFollowUpDashboard() };
+  }
+
+  const headers = raw[0];
+  const now = new Date();
+  const todayStr = formatDate(now);
+  const tomorrowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 12, 0, 0);
+  const tomorrowStr = formatDate(tomorrowDate);
+
+  const counts = { today: 0, tomorrow: 0, overdue: 0, upcoming: 0, completed: 0, cancelled: 0, all: 0 };
+  const followups = [];
+
+  for (let i = 1; i < raw.length; i++) {
+    const row = raw[i];
+    const record = {};
+    headers.forEach(function (h, idx) {
+      let v = row[idx];
+      if (v instanceof Date) v = v.toISOString();
+      record[h] = v;
+    });
+
+    if (record.deleted === "true") continue;
+    const visit = visitMap[record.visit_id];
+    if (!visit) continue;
+
+    const bucket = computeFollowUpBucket(record, todayStr, tomorrowStr);
+    counts[bucket] = (counts[bucket] || 0) + 1;
+    counts.all += 1;
+
+    followups.push({
+      followup_id: record.followup_id,
+      visit_id: record.visit_id,
+      followup_date: record.followup_date,
+      next_followup_date: record.next_followup_date || "",
+      type: record.type,
+      status: record.status,
+      notes: record.notes || "",
+      created_by: record.created_by,
+      created_at: record.created_at,
+      updated_by: record.updated_by,
+      updated_at: record.updated_at,
+      bucket: bucket,
+      visit: visit,
+    });
+  }
+
+  followups.sort(function (a, b) {
+    return String(a.next_followup_date || "").localeCompare(String(b.next_followup_date || ""));
+  });
+
+  return {
+    success: true,
+    data: {
+      followups: followups,
+      counts: counts,
+      today: todayStr,
+      tomorrow: tomorrowStr,
+    },
+  };
+}
+
+function emptyFollowUpDashboard() {
+  return {
+    followups: [],
+    counts: { today: 0, tomorrow: 0, overdue: 0, upcoming: 0, completed: 0, cancelled: 0, all: 0 },
+    today: formatDate(new Date()),
+    tomorrow: formatDate(new Date(Date.now() + 86400000)),
+  };
+}
+
+/**
+ * "completed"/"cancelled" always win (a finished follow-up never shows
+ * as overdue). Otherwise the bucket is purely a function of
+ * next_followup_date vs. today/tomorrow — a missing next date falls
+ * back to "upcoming" since there's nothing due to compare against.
+ */
+function computeFollowUpBucket(record, todayStr, tomorrowStr) {
+  if (record.status === "Completed") return "completed";
+  if (record.status === "Cancelled") return "cancelled";
+
+  const next = String(record.next_followup_date || "");
+  if (!next) return "upcoming";
+  if (next < todayStr) return "overdue";
+  if (next === todayStr) return "today";
+  if (next === tomorrowStr) return "tomorrow";
+  return "upcoming";
 }
 
 /**
@@ -759,6 +1098,8 @@ function handleAddFollowUp(body) {
     created_by: body.requestedBy,
     created_at: now,
   });
+
+  invalidateVisitsCache();
 
   const schoolName = visit.values[visit.headers.indexOf("school_name")] || "";
   logActivity(body.requestedBy, "added a follow-up", String(schoolName) + " — " + body.type + " / " + body.status);
@@ -816,6 +1157,8 @@ function handleUpdateFollowUp(body) {
   if (updatedByIdx !== -1) sheet.getRange(found.rowIndex, updatedByIdx + 1).setValue(body.requestedBy || "");
   if (updatedAtIdx !== -1) sheet.getRange(found.rowIndex, updatedAtIdx + 1).setValue(new Date());
 
+  invalidateVisitsCache();
+
   logActivity(body.requestedBy, "edited a follow-up", String(body.followup_id || ""));
   return { success: true, message: "Follow-up updated." };
 }
@@ -846,35 +1189,36 @@ function handleDeleteFollowUp(body) {
   if (deletedByIdx !== -1) sheet.getRange(found.rowIndex, deletedByIdx + 1).setValue(body.requestedBy || "");
   if (deletedAtIdx !== -1) sheet.getRange(found.rowIndex, deletedAtIdx + 1).setValue(new Date());
 
+  invalidateVisitsCache();
+
   logActivity(body.requestedBy, "deleted a follow-up", String(body.followup_id || ""));
   return { success: true, message: "Follow-up deleted." };
 }
 
 /**
  * True if a visit with the same school_name (case-insensitive) and
- * the same latitude/longitude already exists in the sheet.
+ * the same latitude/longitude already exists in the sheet. Takes the
+ * already-read raw values so callers don't trigger a second read of
+ * the same sheet within one request.
  */
-function isDuplicateVisit(sheet, headers, schoolName, lat, lng) {
+function isDuplicateVisit(raw, headers, schoolName, lat, lng) {
   if (!schoolName || !lat || !lng) return false;
 
   const schoolIdx = headers.indexOf("school_name");
   const latIdx = headers.indexOf("latitude");
   const lngIdx = headers.indexOf("longitude");
   if (schoolIdx === -1 || latIdx === -1 || lngIdx === -1) return false;
+  if (raw.length < 2) return false;
 
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return false;
-
-  const numRows = lastRow - 1;
-  const data = sheet.getRange(2, 1, numRows, headers.length).getValues();
   const normSchool = String(schoolName).trim().toLowerCase();
   const normLat = String(lat).trim();
   const normLng = String(lng).trim();
 
-  for (let i = 0; i < data.length; i++) {
-    const rowSchool = String(data[i][schoolIdx] || "").trim().toLowerCase();
-    const rowLat = String(data[i][latIdx] || "").trim();
-    const rowLng = String(data[i][lngIdx] || "").trim();
+  for (let i = 1; i < raw.length; i++) {
+    const row = raw[i];
+    const rowSchool = String(row[schoolIdx] || "").trim().toLowerCase();
+    const rowLat = String(row[latIdx] || "").trim();
+    const rowLng = String(row[lngIdx] || "").trim();
     if (rowSchool === normSchool && rowLat === normLat && rowLng === normLng) {
       return true;
     }
@@ -883,22 +1227,39 @@ function isDuplicateVisit(sheet, headers, schoolName, lat, lng) {
 }
 
 /**
- * Reads every visit row and returns it as an array of objects keyed
- * by the sheet's actual header row (plus a timestamp). Each visit's
- * "followup" field is transparently kept in sync with its Follow-up
- * Timeline: if the visit has follow-up entries, "followup" reflects
- * the most recent entry's next_followup_date instead of the static
- * value captured at visit creation — so every existing consumer of
- * v.followup (dashboards, follow-up buckets) keeps working unchanged
- * while automatically reflecting the richer follow-up system.
+ * Returns every visit (cross-request cached — see VISITS_CACHE_KEY),
+ * as an array of plain objects keyed by the sheet's actual header row
+ * (plus a timestamp). Each visit's "followup" field is transparently
+ * kept in sync with its Follow-up Timeline: if the visit has follow-up
+ * entries, "followup" reflects the most recent entry's
+ * next_followup_date instead of the static value captured at visit
+ * creation — so every existing consumer of v.followup (dashboards,
+ * follow-up buckets) keeps working unchanged while automatically
+ * reflecting the richer follow-up system.
+ *
+ * On a cache hit this skips reading the Visits AND FollowUps sheets
+ * entirely, since the cached value is the fully-merged, already-
+ * stringified result (no further Date handling is ever needed on it).
  */
-function getAllVisits() {
-  const sheet = getVisitsSheet();
-  if (!sheet || sheet.getLastRow() < 2) return [];
+function getAllVisitsCached() {
+  if (_sheetCache.allVisitsComputed) return _sheetCache.allVisitsComputed;
 
-  const values = sheet.getDataRange().getValues();
-  const headers = values[0];
-  const rows = values.slice(1);
+  let data = cacheGetJson_(VISITS_CACHE_KEY);
+  if (!data) {
+    data = computeAllVisits();
+    cachePutJson_(VISITS_CACHE_KEY, data);
+  }
+  _sheetCache.allVisitsComputed = data;
+  return data;
+}
+
+function computeAllVisits() {
+  const sheet = getVisitsSheet();
+  const raw = sheet ? getVisitsRawValues(sheet) : [];
+  if (raw.length < 2) return [];
+
+  const headers = raw[0];
+  const rows = raw.slice(1);
   const latestFollowUpByVisit = getLatestFollowUpMap();
 
   return rows.map((row) => {
@@ -928,9 +1289,9 @@ function getAllVisits() {
  */
 function getLatestFollowUpMap() {
   const sheet = getFollowUpsSheet();
-  if (!sheet || sheet.getLastRow() < 2) return {};
+  const values = getFollowUpsRawValues(sheet);
+  if (values.length < 2) return {};
 
-  const values = sheet.getDataRange().getValues();
   const headers = values[0];
   const visitIdIdx = headers.indexOf("visit_id");
   const dateIdx = headers.indexOf("followup_date");
@@ -961,23 +1322,20 @@ function getLatestFollowUpMap() {
 // User management (admin only)
 // ---------------------------------------------------------------------
 
-function handleListUsers(e) {
+/** Sanitized (no password) users list, shared by handleListUsers and the dashboard endpoint. */
+function getUsersList() {
   const sheet = getUsersSheet();
-  if (!sheet) return { success: false, message: "Users sheet not found. Run setup() first." };
+  if (!sheet) return [];
+  const values = getUsersRawValues(sheet);
+  if (values.length < 2) return [];
 
-  const guard = requireAdmin(sheet, e.parameter.requestedBy);
-  if (!guard.ok) return { success: false, message: guard.message };
-
-  if (sheet.getLastRow() < 2) return { success: true, data: [] };
-
-  const values = sheet.getDataRange().getValues();
   const headers = values[0];
   const usernameIdx = headers.indexOf("username");
   const nameIdx = headers.indexOf("name");
   const roleIdx = headers.indexOf("role");
   const statusIdx = headers.indexOf("status");
 
-  const data = values.slice(1).map(function (row) {
+  return values.slice(1).map(function (row) {
     return {
       username: row[usernameIdx],
       name: row[nameIdx],
@@ -985,8 +1343,16 @@ function handleListUsers(e) {
       status: row[statusIdx] || "active",
     };
   });
+}
 
-  return { success: true, data: data };
+function handleListUsers(e) {
+  const sheet = getUsersSheet();
+  if (!sheet) return { success: false, message: "Users sheet not found. Run setup() first." };
+
+  const guard = requireAdmin(sheet, e.parameter.requestedBy);
+  if (!guard.ok) return { success: false, message: guard.message };
+
+  return { success: true, data: getUsersList() };
 }
 
 function handleAddUser(body) {
@@ -1017,6 +1383,7 @@ function handleAddUser(body) {
     status: "active",
   });
 
+  invalidateUsersCache();
   logActivity(body.requestedBy, "created a user", username);
   return { success: true, message: "User created." };
 }
@@ -1039,6 +1406,7 @@ function handleUpdateUser(body) {
     sheet.getRange(found.rowIndex, headers.indexOf("role") + 1).setValue(body.role === "admin" ? "admin" : "user");
   }
 
+  invalidateUsersCache();
   logActivity(body.requestedBy, "edited a user", String(body.username || ""));
   return { success: true, message: "User updated." };
 }
@@ -1060,6 +1428,7 @@ function handleSetUserStatus(body) {
   const status = body.status === "disabled" ? "disabled" : "active";
   sheet.getRange(found.rowIndex, found.headers.indexOf("status") + 1).setValue(status);
 
+  invalidateUsersCache();
   logActivity(body.requestedBy, status === "disabled" ? "disabled a user" : "enabled a user", String(body.username || ""));
   return { success: true, message: status === "disabled" ? "User disabled." : "User enabled." };
 }
@@ -1080,6 +1449,7 @@ function handleDeleteUser(body) {
 
   sheet.deleteRow(found.rowIndex);
 
+  invalidateUsersCache();
   logActivity(body.requestedBy, "deleted a user", String(body.username || ""));
   return { success: true, message: "User deleted." };
 }
@@ -1099,6 +1469,7 @@ function handleResetPassword(body) {
 
   sheet.getRange(found.rowIndex, found.headers.indexOf("password") + 1).setValue(newPassword);
 
+  invalidateUsersCache();
   logActivity(body.requestedBy, "changed a password", String(body.username || ""));
   return { success: true, message: "Password reset." };
 }

@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 export interface BarChartDatum {
   label: string;
   value: number;
@@ -15,7 +17,7 @@ interface BarChartProps {
  * library. Values are always direct-labeled (not hover-only), which
  * reads better than tooltips on touch devices.
  */
-export default function BarChart({ data, barColorClass = "bg-amber-500", emptyLabel = "No data yet." }: BarChartProps) {
+function BarChart({ data, barColorClass = "bg-amber-500", emptyLabel = "No data yet." }: BarChartProps) {
   if (data.length === 0) {
     return <p className="text-center text-sm font-body text-ink-400">{emptyLabel}</p>;
   }
@@ -46,3 +48,5 @@ export default function BarChart({ data, barColorClass = "bg-amber-500", emptyLa
     </div>
   );
 }
+
+export default memo(BarChart);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import {
   Plus,
@@ -9,11 +10,6 @@ import {
   CalendarRange,
   ClipboardList,
   RefreshCw,
-  School,
-  MapPin,
-  Flame,
-  Sun,
-  Snowflake,
   Search as SearchIcon,
 } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -22,19 +18,23 @@ import Card from "@/components/Card";
 import Input from "@/components/Input";
 import StatCard from "@/components/StatCard";
 import Loader from "@/components/Loader";
-import VisitDetailsModal from "@/components/VisitDetailsModal";
-import FollowUpSection from "@/components/FollowUpSection";
+import FollowUpWidget from "@/components/FollowUpWidget";
+import VisitCard from "@/components/VisitCard";
+import Pagination from "@/components/Pagination";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { getVisits } from "@/lib/api";
 import { todayISO, currentMonthPrefix, isWithinLastDays } from "@/lib/date";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { VisitRecord } from "@/types";
 
-const interestBadge: Record<string, { icon: typeof Flame; classes: string }> = {
-  Hot: { icon: Flame, classes: "bg-red-50 text-red-600" },
-  Warm: { icon: Sun, classes: "bg-amber-50 text-amber-600" },
-  Cold: { icon: Snowflake, classes: "bg-ink-50 text-ink-500" },
-};
+// Only rendered once the user opens a visit — loaded on demand instead
+// of bundled into the initial dashboard chunk.
+const VisitDetailsModal = dynamic(() => import("@/components/VisitDetailsModal"), {
+  ssr: false,
+});
+
+const PAGE_SIZE = 20;
 
 function DashboardContent() {
   const [visits, setVisits] = useState<VisitRecord[]>([]);
@@ -42,10 +42,13 @@ function DashboardContent() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState("");
+  const [page, setPage] = useState(1);
   const [selectedVisit, setSelectedVisit] = useState<VisitRecord | null>(null);
   const { user } = useAuth();
   const { showError } = useToast();
   const router = useRouter();
+
+  const debouncedSearch = useDebouncedValue(search, 300);
 
   async function loadVisits(silent = false) {
     if (!user) return;
@@ -70,6 +73,10 @@ function DashboardContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.username]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, dateFilter]);
+
   const todayCount = useMemo(
     () => visits.filter((v) => v.date === todayISO()).length,
     [visits]
@@ -89,15 +96,21 @@ function DashboardContent() {
     return visits
       .filter((v) => {
         if (dateFilter && v.date !== dateFilter) return false;
-        if (search.trim()) {
-          const q = search.trim().toLowerCase();
+        if (debouncedSearch.trim()) {
+          const q = debouncedSearch.trim().toLowerCase();
           const haystack = `${v.school_name} ${v.visitor} ${v.mobile} ${v.executive} ${v.username} ${v.interest} ${v.date}`.toLowerCase();
           if (!haystack.includes(q)) return false;
         }
         return true;
       })
       .sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
-  }, [visits, search, dateFilter]);
+  }, [visits, debouncedSearch, dateFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredVisits.length / PAGE_SIZE));
+  const pagedVisits = useMemo(
+    () => filteredVisits.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [filteredVisits, page]
+  );
 
   return (
     <div className="min-h-screen pb-28">
@@ -143,7 +156,7 @@ function DashboardContent() {
           />
         </div>
 
-        {!isLoading && <FollowUpSection visits={visits} onSelectVisit={setSelectedVisit} />}
+        {!isLoading && <FollowUpWidget visits={visits} />}
 
         {/* Search + date filter */}
         <Card className="mb-5 flex flex-col gap-4">
@@ -183,59 +196,21 @@ function DashboardContent() {
               : "No visits match your search or date filter."}
           </Card>
         ) : (
-          <div className="flex flex-col gap-3">
-            {filteredVisits.map((v, idx) => {
-              const badge = interestBadge[v.interest as string] || null;
-              const Icon = badge?.icon;
-              return (
-                <Card
-                  key={`${v.timestamp || idx}-${v.school_name}`}
-                  className="flex cursor-pointer flex-col gap-2 transition active:scale-[0.99]"
-                  onClick={() => setSelectedVisit(v)}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-ink-50 text-ink-700">
-                        <School className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <p className="font-display text-sm font-bold text-ink-900">
-                          {v.school_name}
-                        </p>
-                        <p className="text-xs font-body text-ink-400">{v.date}</p>
-                      </div>
-                    </div>
-                    {badge && Icon && (
-                      <span
-                        className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${badge.classes}`}
-                      >
-                        <Icon className="h-3 w-3" />
-                        {v.interest}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1.5 text-xs font-body text-ink-500">
-                    <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
-                    <span className="truncate">{v.address}</span>
-                  </div>
-                  {v.google_map && (
-                    <a
-                      href={v.google_map}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      className="w-fit text-xs font-body text-blue-600 underline"
-                    >
-                      View on Google Maps
-                    </a>
-                  )}
-                  {v.notes && (
-                    <p className="line-clamp-2 text-xs font-body text-ink-400">{v.notes}</p>
-                  )}
-                </Card>
-              );
-            })}
-          </div>
+          <>
+            <div className="flex flex-col gap-3">
+              {pagedVisits.map((v, idx) => (
+                <VisitCard
+                  key={v.visit_id || `${v.timestamp || idx}-${v.school_name}`}
+                  visit={v}
+                  onSelect={setSelectedVisit}
+                  showNotes
+                />
+              ))}
+            </div>
+            <div className="mt-4">
+              <Pagination page={page} totalPages={totalPages} onChange={setPage} />
+            </div>
+          </>
         )}
       </div>
 

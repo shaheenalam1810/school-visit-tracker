@@ -43,8 +43,3 @@ export function isWithinLastDays(dateISO: string, days: number): boolean {
   const diff = daysBetween(dateISO, todayISO());
   return diff >= 0 && diff < days;
 }
-
-/** YYYY-MM-DD for "tomorrow" relative to today, in local time. */
-export function tomorrowISO(): string {
-  return addDaysISO(todayISO(), 1);
-}

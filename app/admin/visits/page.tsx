@@ -1,26 +1,30 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Search as SearchIcon, School, MapPin, Flame, Sun, Snowflake } from "lucide-react";
+import dynamic from "next/dynamic";
+import { Search as SearchIcon } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import TopBar from "@/components/TopBar";
 import Card from "@/components/Card";
 import Input from "@/components/Input";
 import Select from "@/components/Select";
 import Loader from "@/components/Loader";
-import VisitDetailsModal from "@/components/VisitDetailsModal";
+import VisitCard from "@/components/VisitCard";
+import Pagination from "@/components/Pagination";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
-import { getUsers, getVisits } from "@/lib/api";
+import { getDashboard } from "@/lib/api";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { UserRecord, VisitRecord } from "@/types";
 
-const ALL = "all";
+// Only rendered once a visit is opened — loaded on demand instead of
+// bundled into the initial visit-management chunk.
+const VisitDetailsModal = dynamic(() => import("@/components/VisitDetailsModal"), {
+  ssr: false,
+});
 
-const interestBadge: Record<string, { icon: typeof Flame; classes: string }> = {
-  Hot: { icon: Flame, classes: "bg-red-50 text-red-600" },
-  Warm: { icon: Sun, classes: "bg-amber-50 text-amber-600" },
-  Cold: { icon: Snowflake, classes: "bg-ink-50 text-ink-500" },
-};
+const ALL = "all";
+const PAGE_SIZE = 20;
 
 const INTEREST_OPTIONS = [
   { label: "All Interests", value: ALL },
@@ -41,14 +45,19 @@ function VisitManagementContent() {
   const [usernameFilter, setUsernameFilter] = useState(ALL);
   const [dateFilter, setDateFilter] = useState("");
   const [interestFilter, setInterestFilter] = useState(ALL);
+  const [page, setPage] = useState(1);
   const [selectedVisit, setSelectedVisit] = useState<VisitRecord | null>(null);
+
+  const debouncedSearch = useDebouncedValue(search, 300);
 
   useEffect(() => {
     if (!user) return;
     (async () => {
       setIsLoading(true);
       try {
-        const [v, u] = await Promise.all([getVisits(user.username, user.role), getUsers(user.username)]);
+        // Single Apps Script call for both visits + users, instead of
+        // two separate requests each re-authenticating the caller.
+        const { visits: v, users: u } = await getDashboard(user.username, user.role);
         setVisits(v);
         setUsers(u);
       } catch (err) {
@@ -59,6 +68,10 @@ function VisitManagementContent() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.username]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, usernameFilter, dateFilter, interestFilter]);
 
   const userOptions = useMemo(
     () => [
@@ -74,15 +87,21 @@ function VisitManagementContent() {
         if (usernameFilter !== ALL && v.username?.toLowerCase() !== usernameFilter.toLowerCase()) return false;
         if (dateFilter && v.date !== dateFilter) return false;
         if (interestFilter !== ALL && v.interest !== interestFilter) return false;
-        if (search.trim()) {
-          const q = search.trim().toLowerCase();
+        if (debouncedSearch.trim()) {
+          const q = debouncedSearch.trim().toLowerCase();
           const haystack = `${v.school_name} ${v.visitor} ${v.mobile} ${v.executive} ${v.username} ${v.interest} ${v.date}`.toLowerCase();
           if (!haystack.includes(q)) return false;
         }
         return true;
       })
       .sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
-  }, [visits, search, usernameFilter, dateFilter, interestFilter]);
+  }, [visits, debouncedSearch, usernameFilter, dateFilter, interestFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredVisits.length / PAGE_SIZE));
+  const pagedVisits = useMemo(
+    () => filteredVisits.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [filteredVisits, page]
+  );
 
   return (
     <div className="min-h-screen pb-16">
@@ -126,56 +145,19 @@ function VisitManagementContent() {
         ) : filteredVisits.length === 0 ? (
           <Card className="text-center text-sm font-body text-ink-400">No visits match your filters.</Card>
         ) : (
-          <div className="flex flex-col gap-3">
-            {filteredVisits.map((v, idx) => {
-              const badge = interestBadge[v.interest as string] || null;
-              const Icon = badge?.icon;
-              return (
-                <Card
-                  key={`${v.timestamp || idx}-${v.school_name}`}
-                  className="flex cursor-pointer flex-col gap-2 transition active:scale-[0.99]"
-                  onClick={() => setSelectedVisit(v)}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-ink-50 text-ink-700">
-                        <School className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <p className="font-display text-sm font-bold text-ink-900">{v.school_name}</p>
-                        <p className="text-xs font-body text-ink-400">
-                          {v.date} &middot; {v.executive}
-                        </p>
-                      </div>
-                    </div>
-                    {badge && Icon && (
-                      <span
-                        className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${badge.classes}`}
-                      >
-                        <Icon className="h-3 w-3" />
-                        {v.interest}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1.5 text-xs font-body text-ink-500">
-                    <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
-                    <span className="truncate">{v.address}</span>
-                  </div>
-                  {v.google_map && (
-                    <a
-                      href={v.google_map}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      className="w-fit text-xs font-body text-blue-600 underline"
-                    >
-                      View on Google Maps
-                    </a>
-                  )}
-                </Card>
-              );
-            })}
-          </div>
+          <>
+            <div className="flex flex-col gap-3">
+              {pagedVisits.map((v, idx) => (
+                <VisitCard
+                  key={v.visit_id || `${v.timestamp || idx}-${v.school_name}`}
+                  visit={v}
+                  onSelect={setSelectedVisit}
+                  showExecutive
+                />
+              ))}
+            </div>
+            <Pagination page={page} totalPages={totalPages} onChange={setPage} />
+          </>
         )}
       </div>
 

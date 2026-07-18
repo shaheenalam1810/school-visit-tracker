@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import { ReactNode, memo } from "react";
 import Card from "./Card";
 
 interface StatCardProps {
@@ -8,7 +8,7 @@ interface StatCardProps {
   accent?: "amber" | "ink";
 }
 
-export default function StatCard({ label, value, icon, accent = "ink" }: StatCardProps) {
+function StatCard({ label, value, icon, accent = "ink" }: StatCardProps) {
   const accentClasses =
     accent === "amber" ? "bg-amber-50 text-amber-600" : "bg-ink-50 text-ink-800";
 
@@ -24,3 +24,5 @@ export default function StatCard({ label, value, icon, accent = "ink" }: StatCar
     </Card>
   );
 }
+
+export default memo(StatCard);

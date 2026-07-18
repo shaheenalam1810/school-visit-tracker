@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import {
   Users as UsersIcon,
@@ -28,13 +29,19 @@ import Input from "@/components/Input";
 import Button from "@/components/Button";
 import StatCard from "@/components/StatCard";
 import Loader from "@/components/Loader";
-import VisitDetailsModal from "@/components/VisitDetailsModal";
-import FollowUpSection from "@/components/FollowUpSection";
+import FollowUpWidget from "@/components/FollowUpWidget";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
-import { getUsers, getVisits } from "@/lib/api";
+import { getDashboard } from "@/lib/api";
 import { todayISO, currentMonthPrefix, isWithinLastDays } from "@/lib/date";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { UserRecord, VisitRecord } from "@/types";
+
+// Only rendered once an admin opens a visit — loaded on demand instead
+// of bundled into the initial admin-dashboard chunk.
+const VisitDetailsModal = dynamic(() => import("@/components/VisitDetailsModal"), {
+  ssr: false,
+});
 
 type RankPeriod = "today" | "week" | "month" | "total";
 
@@ -44,6 +51,30 @@ const RANK_TABS: { label: string; value: RankPeriod }[] = [
   { label: "Month", value: "month" },
   { label: "Total", value: "total" },
 ];
+
+const RECENT_VISITS_PREVIEW = 20;
+
+interface RecentVisitRowProps {
+  visit: VisitRecord;
+  onSelect: (visit: VisitRecord) => void;
+}
+
+const RecentVisitRow = memo(function RecentVisitRow({ visit: v, onSelect }: RecentVisitRowProps) {
+  return (
+    <Card
+      className="flex cursor-pointer flex-col gap-1.5 transition active:scale-[0.99]"
+      onClick={() => onSelect(v)}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <p className="truncate font-display text-sm font-bold text-ink-900">{v.school_name}</p>
+        <span className="flex-shrink-0 text-xs font-body text-ink-400">{v.date}</span>
+      </div>
+      <p className="text-xs font-body text-ink-500">
+        {v.executive} &middot; {v.interest || "-"}
+      </p>
+    </Card>
+  );
+});
 
 function AdminDashboardContent() {
   const { user } = useAuth();
@@ -58,15 +89,16 @@ function AdminDashboardContent() {
   const [selectedVisit, setSelectedVisit] = useState<VisitRecord | null>(null);
   const [rankPeriod, setRankPeriod] = useState<RankPeriod>("total");
 
+  const debouncedSearch = useDebouncedValue(search, 300);
+
   useEffect(() => {
     if (!user) return;
     (async () => {
       setIsLoading(true);
       try {
-        const [u, v] = await Promise.all([
-          getUsers(user.username),
-          getVisits(user.username, user.role),
-        ]);
+        // Single Apps Script call for both visits + users, instead of
+        // two separate requests each re-authenticating the caller.
+        const { visits: v, users: u } = await getDashboard(user.username, user.role);
         setUsers(u);
         setVisits(v);
       } catch (err) {
@@ -133,15 +165,15 @@ function AdminDashboardContent() {
     return visits
       .filter((v) => {
         if (dateFilter && v.date !== dateFilter) return false;
-        if (search.trim()) {
-          const q = search.trim().toLowerCase();
+        if (debouncedSearch.trim()) {
+          const q = debouncedSearch.trim().toLowerCase();
           const haystack = `${v.school_name} ${v.visitor} ${v.mobile} ${v.executive} ${v.username} ${v.interest} ${v.date}`.toLowerCase();
           if (!haystack.includes(q)) return false;
         }
         return true;
       })
       .sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
-  }, [visits, search, dateFilter]);
+  }, [visits, debouncedSearch, dateFilter]);
 
   return (
     <div className="min-h-screen pb-28">
@@ -270,7 +302,7 @@ function AdminDashboardContent() {
           )}
         </Card>
 
-        {!isLoading && <FollowUpSection visits={visits} onSelectVisit={setSelectedVisit} />}
+        {!isLoading && <FollowUpWidget visits={visits} />}
 
         {/* Search + date filter */}
         <Card className="mb-5 flex flex-col gap-4">
@@ -299,24 +331,16 @@ function AdminDashboardContent() {
           <Card className="text-center text-sm font-body text-ink-400">No visits match your filters.</Card>
         ) : (
           <div className="flex flex-col gap-3">
-            {filteredVisits.slice(0, 25).map((v, idx) => (
-              <Card
-                key={`${v.timestamp || idx}-${v.school_name}`}
-                className="flex cursor-pointer flex-col gap-1.5 transition active:scale-[0.99]"
-                onClick={() => setSelectedVisit(v)}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <p className="truncate font-display text-sm font-bold text-ink-900">{v.school_name}</p>
-                  <span className="flex-shrink-0 text-xs font-body text-ink-400">{v.date}</span>
-                </div>
-                <p className="text-xs font-body text-ink-500">
-                  {v.executive} &middot; {v.interest || "-"}
-                </p>
-              </Card>
+            {filteredVisits.slice(0, RECENT_VISITS_PREVIEW).map((v, idx) => (
+              <RecentVisitRow
+                key={v.visit_id || `${v.timestamp || idx}-${v.school_name}`}
+                visit={v}
+                onSelect={setSelectedVisit}
+              />
             ))}
-            {filteredVisits.length > 25 && (
+            {filteredVisits.length > RECENT_VISITS_PREVIEW && (
               <p className="text-center text-xs font-body text-ink-400">
-                Showing 25 of {filteredVisits.length}. Open Manage Visits to see all.
+                Showing {RECENT_VISITS_PREVIEW} of {filteredVisits.length}. Open Manage Visits to see all.
               </p>
             )}
           </div>

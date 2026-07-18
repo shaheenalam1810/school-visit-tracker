@@ -2,6 +2,8 @@ import axios from "axios";
 import {
   ActivityLogRecord,
   ApiResponse,
+  DashboardData,
+  FollowUpDashboardData,
   FollowUpPayload,
   FollowUpRecord,
   LoginResponse,
@@ -83,6 +85,49 @@ export async function getVisits(
   });
   const data = res.data as ApiResponse<VisitRecord[]>;
   return data.data || [];
+}
+
+/**
+ * Fetches visits + (for admins) users in a single Apps Script call.
+ * Pages that need both (admin dashboard, visit management, reports)
+ * should use this instead of separate getVisits()/getUsers() calls —
+ * each Apps Script request re-authenticates the caller and re-reads
+ * the Users sheet from scratch, so merging halves that overhead.
+ */
+export async function getDashboard(
+  username: string,
+  role: UserRole
+): Promise<DashboardData> {
+  const res = await apiClient.get("", {
+    params: { action: "dashboard", username, role },
+  });
+  const data = res.data as ApiResponse<DashboardData>;
+  return data.data || { visits: [], users: [], role: "user", status: "active" };
+}
+
+/**
+ * Fetches every follow-up entry the caller may see (all of them for an
+ * admin, only entries on their own visits otherwise — enforced
+ * server-side), each already joined with its parent visit so the
+ * Daily Follow-up Dashboard (/followups) can render and open a visit
+ * without a second request.
+ */
+export async function getFollowUpDashboard(
+  username: string,
+  role: UserRole
+): Promise<FollowUpDashboardData> {
+  const res = await apiClient.get("", {
+    params: { action: "followupdashboard", username, role },
+  });
+  const data = res.data as ApiResponse<FollowUpDashboardData>;
+  return (
+    data.data || {
+      followups: [],
+      counts: { today: 0, tomorrow: 0, overdue: 0, upcoming: 0, completed: 0, cancelled: 0, all: 0 },
+      today: "",
+      tomorrow: "",
+    }
+  );
 }
 
 /**
@@ -228,5 +273,3 @@ export async function logoutRequest(username: string): Promise<void> {
     // Logging a logout must never block the user from actually logging out.
   }
 }
-
-export default apiClient;

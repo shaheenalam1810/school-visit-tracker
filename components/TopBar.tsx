@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { ArrowLeft, LogOut, School } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
@@ -9,7 +10,7 @@ interface TopBarProps {
   showBack?: boolean;
 }
 
-export default function TopBar({ title, showBack = false }: TopBarProps) {
+function TopBar({ title, showBack = false }: TopBarProps) {
   const router = useRouter();
   const { user, logout } = useAuth();
 
@@ -48,3 +49,5 @@ export default function TopBar({ title, showBack = false }: TopBarProps) {
     </header>
   );
 }
+
+export default memo(TopBar);

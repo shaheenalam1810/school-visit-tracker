@@ -69,7 +69,13 @@ export type VisitEditableFields = Pick<
 
 export type FollowUpType = "Phone Call" | "Physical Visit" | "WhatsApp" | "Email" | "Online Meeting";
 
-export type FollowUpStatus = "Pending" | "Completed" | "Interested" | "Not Interested" | "No Response";
+export type FollowUpStatus =
+  | "Pending"
+  | "Completed"
+  | "Interested"
+  | "Not Interested"
+  | "No Response"
+  | "Cancelled";
 
 export interface FollowUpRecord {
   followup_id: string;
@@ -123,6 +129,45 @@ export interface ApiResponse<T = unknown> {
   success: boolean;
   message?: string;
   data?: T;
+}
+
+export interface DashboardData {
+  visits: VisitRecord[];
+  users: UserRecord[];
+  role: UserRole;
+  status: UserStatus;
+}
+
+/**
+ * Auto-computed placement for a follow-up entry on the Daily Follow-up
+ * Dashboard. Derived server-side from next_followup_date vs. today —
+ * "completed"/"cancelled" always take precedence over the date, per
+ * the Auto Status rule (an overdue-but-completed entry is never shown
+ * as overdue).
+ */
+export type FollowUpBucket = "overdue" | "today" | "tomorrow" | "upcoming" | "completed" | "cancelled";
+
+/** One Follow-up Timeline entry joined with its parent visit's display fields. */
+export interface FollowUpDashboardRecord extends FollowUpRecord {
+  bucket: FollowUpBucket;
+  visit: VisitRecord;
+}
+
+export interface FollowUpDashboardCounts {
+  today: number;
+  tomorrow: number;
+  overdue: number;
+  upcoming: number;
+  completed: number;
+  cancelled: number;
+  all: number;
+}
+
+export interface FollowUpDashboardData {
+  followups: FollowUpDashboardRecord[];
+  counts: FollowUpDashboardCounts;
+  today: string;
+  tomorrow: string;
 }
 
 export interface ActivityLogRecord {

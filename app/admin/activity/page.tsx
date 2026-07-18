@@ -22,6 +22,7 @@ import Skeleton from "@/components/Skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { getActivityLog } from "@/lib/api";
+import { useDebouncedValue } from "@/lib/useDebouncedValue";
 import { ActivityLogRecord } from "@/types";
 
 const ACTION_ICONS: Record<string, typeof ActivityIcon> = {
@@ -55,6 +56,7 @@ function ActivityLogContent() {
   const [logs, setLogs] = useState<ActivityLogRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 300);
 
   useEffect(() => {
     if (!user) return;
@@ -75,13 +77,13 @@ function ActivityLogContent() {
   const filtered = useMemo(() => {
     return logs
       .filter((l) => {
-        if (!search.trim()) return true;
-        const q = search.trim().toLowerCase();
+        if (!debouncedSearch.trim()) return true;
+        const q = debouncedSearch.trim().toLowerCase();
         const haystack = `${l.username} ${l.action} ${l.details || ""}`.toLowerCase();
         return haystack.includes(q);
       })
       .sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
-  }, [logs, search]);
+  }, [logs, debouncedSearch]);
 
   return (
     <div className="min-h-screen pb-16">

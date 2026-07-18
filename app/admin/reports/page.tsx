@@ -11,7 +11,7 @@ import Button from "@/components/Button";
 import Loader from "@/components/Loader";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
-import { getUsers, getVisits } from "@/lib/api";
+import { getDashboard } from "@/lib/api";
 import { buildCsv, downloadCsv } from "@/lib/csv";
 import { todayISO } from "@/lib/date";
 import { UserRecord, VisitRecord } from "@/types";
@@ -62,7 +62,9 @@ function ReportsContent() {
     (async () => {
       setIsLoading(true);
       try {
-        const [v, u] = await Promise.all([getVisits(user.username, user.role), getUsers(user.username)]);
+        // Single Apps Script call for both visits + users, instead of
+        // two separate requests each re-authenticating the caller.
+        const { visits: v, users: u } = await getDashboard(user.username, user.role);
         setVisits(v);
         setUsers(u);
       } catch {
